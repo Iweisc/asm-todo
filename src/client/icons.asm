@@ -1,5 +1,6 @@
-; Status, priority and avatar icons, drawn in a 14px box from text.asm's shapes.
-; Shape coordinates are in quarter pixels, so the box is 56 units wide.
+; Status, priority and avatar icons, drawn in a 14px box from shapes.asm, and
+; the X on close buttons. Shape coordinates are in quarter pixels, so the box
+; is 56 units wide.
 
 %define ICON_SIZE       14
 
@@ -219,6 +220,47 @@ draw_avatar:
     mov r8d, INK(0xffffff, ST_SMALL)
     call draw_text
     add rsp, 8
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; An X, for closing and removing things.
+; edi = x, esi = y (its center, pixels), edx = half its size (quarter pixels), ecx = color
+draw_cross:
+    push rbx
+    push r12
+    push r13
+    push r14
+    sub rsp, 24
+    mov r12d, edi
+    mov r13d, esi
+    mov ebx, edx
+    mov r14d, ecx
+    neg edx
+    mov [rsp], edx                          ; top left to bottom right
+    mov [rsp + 4], edx
+    mov [rsp + 8], ebx
+    mov [rsp + 12], ebx
+    mov rdi, rsp
+    mov esi, 2
+    mov edx, r12d
+    mov ecx, r13d
+    mov r8d, r14d
+    mov r9d, 6
+    call aa_polyline
+    mov eax, [rsp]                          ; then bottom left to top right
+    mov [rsp + 4], ebx
+    mov [rsp + 12], eax
+    mov rdi, rsp
+    mov esi, 2
+    mov edx, r12d
+    mov ecx, r13d
+    mov r8d, r14d
+    mov r9d, 6
+    call aa_polyline
+    add rsp, 24
     pop r14
     pop r13
     pop r12

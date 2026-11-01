@@ -38,13 +38,12 @@ text s_label_count,     " labels"
 text s_created,         "Created "
 text s_updated,         "Updated "
 text s_delete_issue,    "Delete issue"
+text s_confirm_delete,  "Click again to delete"
 text s_new_team_title,  "Create a team"
 text s_team_name,       "Name"
 text s_team_key,        "Identifier, used in issue IDs like ENG-12"
 text s_label_is,        "Label: "
 text s_project_is,      "Project: "
-text s_unfilter,        "  x"
-text s_close,           "x"
 text s_owner,           "owner"
 text s_connected_to,    "Connected to "
 text s_connecting_to,   "Connecting to "
@@ -464,7 +463,7 @@ draw_login:
     lea rdx, [s_log_in]
     mov ecx, s_log_in_len
     mov r8d, A_LOGIN
-    mov r9d, 1
+    mov r9d, BTN_PRIMARY
     call draw_button
     lea edi, [ebx + eax + 8]
     lea esi, [r12d + 240]
@@ -500,537 +499,6 @@ draw_login:
     call draw_net_status
     pop r13
     pop r12
-    pop rbx
-    ret
-
-; --- sidebar ---
-
-; One sidebar row: highlight and hit region. side_selected marks the current
-; one, but while a conversation is open only its row can be current.
-; edi = y, esi = action, edx = arg. 28px tall. -> eax = the row's background
-side_row:
-    push rbx
-    push r12
-    push r13
-    push r14
-    sub rsp, 8
-    mov ebx, edi
-    mov r12d, esi
-    mov r13d, edx
-    mov r14d, C_SELECT
-    cmp byte [side_selected], 0
-    je .hover
-    cmp byte [chat_open], 0
-    je .fill
-    cmp r12d, A_CHAT
-    je .fill
-.hover:
-    mov edi, r12d
-    mov esi, r13d
-    call hovering
-    mov r14d, C_BG
-    test eax, eax
-    jz .hit
-    mov r14d, C_HOVER
-.fill:
-    mov edi, 8
-    mov esi, ebx
-    mov edx, SIDEBAR_W - 16
-    mov ecx, 28
-    mov r8d, r14d
-    mov r9d, 6
-    call fill_rrect
-.hit:
-    mov edi, 8
-    mov esi, ebx
-    mov edx, SIDEBAR_W - 16
-    mov ecx, 28
-    mov r8d, r12d
-    mov r9d, r13d
-    call add_hit
-    mov byte [side_selected], 0
-    mov eax, r14d
-    add rsp, 8
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    ret
-
-; A sidebar row that opens a conversation: current while it's open, with a
-; dot when it has messages we haven't seen.
-; edi = y, esi = peer, edx = the dot's x -> eax = the row's background, ecx = 1 if unread
-chat_side_row:
-    push rbx
-    push r12
-    push r13
-    push r14
-    sub rsp, 8
-    mov ebx, edi
-    mov r12d, esi
-    mov r13d, edx
-    xor eax, eax
-    cmp byte [chat_open], 0
-    je .current
-    cmp r12d, [chat_peer]
-    sete al
-.current:
-    mov [side_selected], al
-    mov edi, ebx
-    mov esi, A_CHAT
-    mov edx, r12d
-    call side_row
-    mov r14d, eax
-    mov edi, r12d
-    call find_unread
-    xor ecx, ecx
-    cmp eax, -1
-    je .done
-    lea edi, [r13d * 4]
-    lea esi, [ebx * 4 + 56]
-    mov edx, 12
-    mov ecx, C_ACCENT_HI
-    call aa_disc
-    mov ecx, 1
-.done:
-    mov eax, r14d
-    add rsp, 8
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    ret
-
-; Sidebar row text. edi = x, esi = row y, rdx = text, ecx = length
-side_text:
-    add esi, 19
-    mov r8d, INK(C_TEXT, ST_BODY)
-    mov r9d, SIDEBAR_W - 24
-    sub r9d, edi
-    jmp draw_text_fit
-
-; A section heading. edi = y, rsi = text, edx = length
-side_heading:
-    mov ecx, edx
-    mov rdx, rsi
-    lea esi, [edi + 18]
-    mov edi, 18
-    mov r8d, INK(C_FAINT, ST_SMALL)
-    jmp draw_text
-
-draw_sidebar:
-    push rbx
-    push rbp
-    push r12
-    push r13
-    push r14
-    push r15
-    sub rsp, 8
-    xor edi, edi
-    xor esi, esi
-    mov edx, SIDEBAR_W
-    mov ecx, [win_h]
-    sub ecx, 64
-    call set_clip
-
-    mov edi, 16                             ; who's logged in
-    mov esi, 14
-    mov edx, 20
-    mov ecx, [my_id]
-    lea r8, [my_name]
-    call draw_avatar
-    mov edi, 44
-    mov esi, 29
-    lea rdx, [my_name]
-    mov ecx, [my_name_len]
-    mov r8d, INK(C_TEXT, ST_MEDIUM)
-    mov r9d, SIDEBAR_W - 60
-    call draw_text_fit
-
-    mov edi, A_NEW_ISSUE                    ; the new issue button
-    mov esi, -1
-    call hovering
-    mov r9d, C_RAISED
-    mov ecx, C_SELECT
-    test eax, eax
-    cmovnz r9d, ecx
-    mov edi, 10
-    mov esi, 48
-    mov edx, SIDEBAR_W - 20
-    mov ecx, 32
-    mov r8d, C_LINE
-    mov r10d, 7
-    call outline_rrect
-    mov edi, 10
-    mov esi, 48
-    mov edx, SIDEBAR_W - 20
-    mov ecx, 32
-    mov r8d, A_NEW_ISSUE
-    mov r9d, -1
-    call add_hit
-    mov dword [pi_item + MI_ICON], IC_PLUS
-    lea rdi, [pi_item]
-    mov esi, 22
-    mov edx, 57
-    call draw_item_icon
-    mov edi, 44
-    mov esi, 69
-    lea rdx, [s_new_issue]
-    mov ecx, s_new_issue_len
-    mov r8d, INK(C_TEXT, ST_MEDIUM)
-    call draw_text
-    mov edi, SIDEBAR_W - 40
-    mov esi, 55
-    mov edx, 'C'
-    call draw_keycap
-
-    mov ebx, 92                             ; y
-    cmp dword [current_team], 0
-    je .teams
-    cmp dword [view_mode], V_MINE
-    sete byte [side_selected]
-    mov edi, ebx
-    mov esi, A_VIEW
-    mov edx, V_MINE
-    call side_row
-    mov edi, 4 * 25                         ; an avatar-sized ring for "me"
-    lea esi, [ebx * 4 + 56]
-    mov edx, 24
-    mov ecx, C_DIM
-    mov r8d, 6
-    call aa_ring
-    mov edi, 40
-    mov esi, ebx
-    lea rdx, [s_my_issues]
-    mov ecx, s_my_issues_len
-    call side_text
-    add ebx, 40
-
-.teams:
-    mov edi, ebx
-    lea rsi, [s_your_teams]
-    mov edx, s_your_teams_len
-    call side_heading
-    mov edi, A_NEW_TEAM                     ; "+" to make another
-    xor esi, esi
-    call hovering
-    mov r8d, C_FAINT
-    mov ecx, C_TEXT
-    test eax, eax
-    cmovnz r8d, ecx
-    mov [rsp], r8d
-    mov edi, SIDEBAR_W - 30
-    lea esi, [ebx + 7]
-    mov edx, 2
-    mov ecx, 10
-    call fill_rect
-    mov edi, SIDEBAR_W - 34
-    lea esi, [ebx + 11]
-    mov edx, 10
-    mov ecx, 2
-    mov r8d, [rsp]
-    call fill_rect
-    mov edi, SIDEBAR_W - 40
-    mov esi, ebx
-    mov edx, 24
-    mov ecx, 24
-    mov r8d, A_NEW_TEAM
-    xor r9d, r9d
-    call add_hit
-    add ebx, 28
-
-    lea r12, [teams]
-    mov r13d, [team_count]
-.team:
-    test r13d, r13d
-    jz .projects
-    mov edi, ebx
-    mov esi, A_TEAM
-    mov edx, [r12 + CO_ID]
-    call side_row
-    mov edi, 16                             ; the team's badge
-    lea esi, [ebx + 5]
-    mov edx, 18
-    mov ecx, 18
-    mov r8d, C_ACCENT
-    mov r9d, 5
-    call fill_rrect
-    lea rdx, [r12 + CO_KEY]
-    mov edi, 20
-    lea esi, [ebx + 18]
-    mov ecx, 1
-    mov r8d, INK(0xffffff, ST_SMALL)
-    call draw_text
-    mov edi, 44
-    mov esi, ebx
-    lea rdx, [r12 + CO_NAME]
-    movzx ecx, byte [r12 + CO_NAME_LEN]
-    call side_text
-    add ebx, 30
-    mov eax, [r12 + CO_ID]
-    cmp eax, [current_team]
-    jne .next_team
-    ; The current team's views, indented.
-    xor r14d, r14d
-.team_view:
-    cmp r14d, V_MINE
-    jae .channel
-    cmp [view_mode], r14d
-    jne .not_current
-    cmp dword [filter_project], 0
-    sete byte [side_selected]
-.not_current:
-    mov edi, ebx
-    mov esi, A_VIEW
-    mov edx, r14d
-    call side_row
-    lea rdi, [s_issues]
-    mov esi, s_issues_len
-    cmp r14d, V_ALL
-    je .view_text
-    lea rdi, [s_active]
-    mov esi, s_active_len
-    cmp r14d, V_ACTIVE
-    je .view_text
-    lea rdi, [s_backlog]
-    mov esi, s_backlog_len
-.view_text:
-    mov rdx, rdi
-    mov ecx, esi
-    mov edi, 52
-    mov esi, ebx
-    call side_text
-    add ebx, 30
-    inc r14d
-    jmp .team_view
-.channel:
-    mov edi, ebx
-    xor esi, esi
-    mov edx, SIDEBAR_W - 26
-    call chat_side_row
-    mov r8d, INK(C_TEXT, ST_BODY)
-    mov eax, INK(0xffffff, ST_MEDIUM)       ; unread
-    test ecx, ecx
-    cmovnz r8d, eax
-    mov edi, 52
-    lea esi, [ebx + 19]
-    lea rdx, [s_general]
-    mov ecx, s_general_len
-    call draw_text
-    add ebx, 30
-.next_team:
-    add r12, CO_SIZE
-    dec r13d
-    jmp .team
-
-.projects:
-    cmp dword [current_team], 0
-    je .bottom
-    add ebx, 12
-    lea r12, [view_projects]
-    mov r13d, 1
-    mov r14d, ebx                           ; heading goes here if there are any
-    add ebx, 28
-.project:
-    cmp r13d, PROJECT_SLOTS
-    ja .projects_done
-    cmp byte [r12 + LB_NAME_LEN], 0
-    je .next_project
-    cmp [filter_project], r13d
-    sete byte [side_selected]
-    mov edi, ebx
-    mov esi, A_PROJECT
-    mov edx, r13d
-    call side_row
-    mov edi, 4 * 25
-    lea esi, [ebx * 4 + 56]
-    mov edx, 18
-    mov ecx, [r12 + LB_COLOR]
-    call aa_disc
-    mov edi, 44
-    mov esi, ebx
-    lea rdx, [r12 + LB_NAME]
-    movzx ecx, byte [r12 + LB_NAME_LEN]
-    call side_text
-    add ebx, 30
-.next_project:
-    add r12, PJ_SIZE
-    inc r13d
-    jmp .project
-.projects_done:
-    lea eax, [r14d + 28]
-    cmp ebx, eax
-    jne .project_heading
-    mov ebx, r14d                           ; no projects, no heading
-    jmp .members
-.project_heading:
-    mov edi, r14d
-    lea rsi, [s_projects]
-    mov edx, s_projects_len
-    call side_heading
-
-.members:
-    add ebx, 12
-    mov edi, ebx
-    lea rsi, [s_members]
-    mov edx, s_members_len
-    call side_heading
-    add ebx, 28
-    call current_team_row
-    xor ebp, ebp                            ; we own this team
-    test rax, rax
-    jz .member_rows
-    cmp byte [rax + CO_ROLE], ROLE_OWNER
-    sete bpl
-.member_rows:
-    lea r12, [members]
-    mov r13d, [member_count]
-.member:
-    test r13d, r13d
-    jz .invite
-    mov edi, ebx                            ; the row opens a conversation with them
-    mov esi, [r12 + CM_ID]
-    mov edx, SIDEBAR_W - 72
-    call chat_side_row
-    mov [rsp], eax                          ; the row's background
-    mov r14d, INK(C_TEXT, ST_BODY)          ; how their name reads, and its room
-    mov r15d, SIDEBAR_W - 110
-    test ecx, ecx
-    jz .avatar
-    mov r14d, INK(0xffffff, ST_MEDIUM)      ; unread, and the dot takes some room
-    mov r15d, SIDEBAR_W - 124
-.avatar:
-    mov edi, 16
-    lea esi, [ebx + 5]
-    mov edx, 18
-    mov ecx, [r12 + CM_ID]
-    lea r8, [r12 + CM_NAME]
-    call draw_avatar
-    mov edi, 4 * 31                         ; online dot on the avatar's corner
-    lea esi, [ebx * 4 + 4 * 21]
-    mov edx, 14
-    mov ecx, [rsp]
-    call aa_disc
-    mov ecx, C_ONLINE
-    cmp byte [r12 + CM_ONLINE], 0
-    jne .dot
-    mov ecx, C_FAINT
-.dot:
-    mov edi, 4 * 31
-    lea esi, [ebx * 4 + 4 * 21]
-    mov edx, 9
-    call aa_disc
-    mov edi, 44
-    lea esi, [ebx + 19]
-    lea rdx, [r12 + CM_NAME]
-    movzx ecx, byte [r12 + CM_NAME_LEN]
-    mov r8d, r14d
-    mov r9d, r15d
-    call draw_text_fit
-    cmp byte [r12 + CM_ROLE], ROLE_OWNER
-    jne .member_action
-    mov edi, SIDEBAR_W - 60
-    lea esi, [ebx + 19]
-    lea rdx, [s_owner]
-    mov ecx, s_owner_len
-    mov r8d, INK(C_FAINT, ST_SMALL)
-    call draw_text
-    jmp .next_member
-.member_action:
-    ; Owners can remove others, and anyone else can leave.
-    mov eax, [r12 + CM_ID]
-    cmp eax, [my_id]
-    je .leave
-    test ebp, ebp
-    jz .next_member
-    lea r14, [s_remove]
-    mov r15d, s_remove_len
-    mov r8d, A_REMOVE
-    mov r9d, eax
-    jmp .action_link
-.leave:
-    test ebp, ebp
-    jnz .next_member
-    lea r14, [s_leave]
-    mov r15d, s_leave_len
-    mov r8d, A_LEAVE
-    xor r9d, r9d
-.action_link:
-    push r8
-    push r9
-    mov edi, SIDEBAR_W - 64
-    mov esi, ebx
-    mov edx, 56
-    mov ecx, 28
-    call add_hit
-    pop rsi
-    pop rdi
-    call hovering
-    mov r8d, INK(C_FAINT, ST_SMALL)
-    mov ecx, INK(C_DANGER, ST_SMALL)
-    test eax, eax
-    cmovnz r8d, ecx
-    mov edi, SIDEBAR_W - 60
-    lea esi, [ebx + 19]
-    mov rdx, r14
-    mov ecx, r15d
-    call draw_text
-.next_member:
-    add ebx, 28
-    add r12, CM_SIZE
-    dec r13d
-    jmp .member
-.invite:
-    test ebp, ebp
-    jz .bottom
-    add ebx, 4
-    mov edi, F_MEMBER
-    mov esi, 12
-    mov edx, ebx
-    mov ecx, SIDEBAR_W - 24
-    call draw_field_box
-
-.bottom:
-    call reset_clip
-    mov edi, 8
-    mov esi, [win_h]
-    sub esi, 60
-    mov edx, SIDEBAR_W - 16
-    mov ecx, 1
-    mov r8d, C_LINE
-    call fill_rect
-    mov edi, A_LOGOUT
-    xor esi, esi
-    call hovering
-    mov r8d, INK(C_DIM, ST_SMALL)
-    mov ecx, INK(C_TEXT, ST_SMALL)
-    test eax, eax
-    cmovnz r8d, ecx
-    mov edi, 16
-    mov esi, [win_h]
-    sub esi, 40
-    lea rdx, [s_log_out]
-    mov ecx, s_log_out_len
-    call draw_text
-    mov edi, 8
-    mov esi, [win_h]
-    sub esi, 56
-    mov edx, 80
-    mov ecx, 24
-    mov r8d, A_LOGOUT
-    xor r9d, r9d
-    call add_hit
-    mov edi, 16
-    mov esi, [win_h]
-    sub esi, 16
-    mov edx, SIDEBAR_W - 24
-    call draw_net_status
-    add rsp, 8
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbp
     pop rbx
     ret
 
@@ -1133,13 +601,11 @@ draw_header:
     mov r8d, A_CLOSE
     xor r9d, r9d
     call add_hit
-    mov edi, r14d
-    mov esi, 28
-    lea edx, [r12d + 27]
-    lea rcx, [s_close]
-    mov r8d, s_close_len
-    mov r9d, INK(C_DIM, ST_MEDIUM)
-    call draw_centered
+    lea edi, [r14d + 14]
+    lea esi, [r12d + 22]
+    mov edx, 18
+    mov ecx, C_DIM
+    call draw_cross
 .done:
     add rsp, 8
     pop r14
@@ -1303,16 +769,13 @@ draw_filters:
     lea rsi, [r15 + LB_NAME]
     movzx edx, byte [r15 + LB_NAME_LEN]
     call put_mem
-    lea rsi, [s_unfilter]
-    mov edx, s_unfilter_len
-    call put_mem
     lea rdx, [scratch]
     mov rcx, rdi
     sub rcx, rdx
     mov edi, r14d
     lea esi, [r12d + 8]
     mov r8d, [r15 + LB_COLOR]
-    call draw_chip
+    call draw_removable_chip
     mov edx, eax
     mov edi, r14d
     lea esi, [r12d + 8]
@@ -2149,16 +1612,19 @@ text_height:
     ret
 
 ; The open issue's properties, down the right side.
-; edi = x, esi = top, edx = h, rcx = view issue
+; edi = x, esi = top, edx = h, rcx = view issue, r8d = width
 draw_props:
     push rbx
     push rbp
     push r12
     push r13
     push r14
+    push r15
+    sub rsp, 8
     mov ebx, edi
     mov r12d, esi
     mov rbp, rcx
+    mov r15d, r8d
     mov ecx, edx
     mov edx, 1
     mov r8d, C_LINE
@@ -2183,7 +1649,7 @@ draw_props:
     jz .pick
     lea edi, [ebx + 92]
     mov esi, r13d
-    mov edx, PROPS_W - 104
+    lea edx, [r15d - 104]
     mov ecx, 28
     mov r8d, C_HOVER
     mov r9d, 6
@@ -2191,7 +1657,7 @@ draw_props:
 .pick:
     lea edi, [ebx + 92]
     mov esi, r13d
-    mov edx, PROPS_W - 104
+    lea edx, [r15d - 104]
     mov ecx, 28
     mov r8d, A_PICK
     mov r9d, r14d
@@ -2201,7 +1667,7 @@ draw_props:
     call prop_info
     lea edi, [ebx + 100]
     mov esi, r13d
-    mov edx, PROPS_W - 120
+    lea edx, [r15d - 120]
     call draw_prop
     add r13d, 36
     inc r14d
@@ -2210,7 +1676,7 @@ draw_props:
     add r13d, 8
     lea edi, [ebx + 20]
     mov esi, r13d
-    mov edx, PROPS_W - 40
+    lea edx, [r15d - 40]
     mov ecx, 1
     mov r8d, C_LINE
     call fill_rect
@@ -2239,13 +1705,23 @@ draw_props:
     mov r8d, INK(C_FAINT, ST_SMALL)
     call draw_scratch
     add r13d, 24
-    lea edi, [ebx + 20]
-    mov esi, r13d
+    ; Deleting can't be undone, so the first click only asks again.
     lea rdx, [s_delete_issue]
     mov ecx, s_delete_issue_len
-    mov r8d, A_DELETE
     xor r9d, r9d
+    mov eax, [rbp + CI_ID]
+    cmp eax, [delete_armed]
+    jne .delete
+    lea rdx, [s_confirm_delete]
+    mov ecx, s_confirm_delete_len
+    mov r9d, BTN_DANGER
+.delete:
+    lea edi, [ebx + 20]
+    mov esi, r13d
+    mov r8d, A_DELETE
     call draw_button
+    add rsp, 8
+    pop r15
     pop r14
     pop r13
     pop r12
@@ -2273,19 +1749,31 @@ draw_detail:
     jz .gone
     mov rbx, rax
 
+    ; Narrow windows get narrower properties and margins, so the text
+    ; column keeps some room.
+    mov dword [rsp + 36], PROPS_W
+    mov ebp, 48                             ; the column's margin
+    cmp dword [rsp + 8], DETAIL_NARROW
+    jge .props
+    mov dword [rsp + 36], PROPS_NARROW_W
+    mov ebp, 24
+.props:
     mov edi, [rsp]
     add edi, [rsp + 8]
-    sub edi, PROPS_W
+    sub edi, [rsp + 36]
     mov esi, [rsp + 4]
     mov edx, [rsp + 12]
     mov rcx, rbx
+    mov r8d, [rsp + 36]
     call draw_props
 
     mov eax, [rsp]                          ; the main column
-    add eax, 48
+    add eax, ebp
     mov [rsp + 24], eax
     mov eax, [rsp + 8]
-    sub eax, PROPS_W + 96
+    sub eax, [rsp + 36]
+    sub eax, ebp
+    sub eax, ebp
     mov ecx, 760
     cmp eax, ecx
     cmovg eax, ecx
@@ -2299,7 +1787,7 @@ draw_detail:
     mov esi, [rsp + 4]
     mov edx, edi
     add edx, [rsp + 8]
-    sub edx, PROPS_W
+    sub edx, [rsp + 36]
     mov ecx, esi
     add ecx, [rsp + 12]
     call clip_to
@@ -2323,6 +1811,9 @@ draw_detail:
     mov eax, 28
     jmp .title_hit
 .title:
+    mov [fields + F_TITLE * FD_SIZE + FD_X], r14d   ; so a click can place the caret
+    mov [fields + F_TITLE * FD_SIZE + FD_Y], r12d
+    mov [fields + F_TITLE * FD_SIZE + FD_W], r15d
     mov dword [wrap_lh], 28
     lea rdi, [rbx + CI_TITLE]
     movzx esi, byte [rbx + CI_TITLE_LEN]
@@ -2343,19 +1834,71 @@ draw_detail:
 
 .description:
     lea r12d, [r12d + ebp + 24]
+    mov edi, r14d
+    mov esi, r12d
+    mov edx, r15d
+    call draw_description
+    mov ebp, eax
+.activity:
+    mov rdi, rbx
+    mov esi, r14d
+    lea edx, [r12d + ebp + 32]
+    mov ecx, r15d
+    call draw_activity
+    mov r12d, eax
+    add r12d, 48
+    sub r12d, [rsp + 32]
+    mov [content_h], r12d
+    mov rdi, [rsp + 16]
+    call restore_clip
+    jmp .done
+.gone:
+    ; Opened but not in the view yet, or about to close.
+    mov edi, [rsp]
+    mov esi, [rsp + 8]
+    mov edx, [rsp + 4]
+    add edx, 80
+    lea rcx, [s_loading]
+    mov r8d, s_loading_len
+    mov r9d, INK(C_DIM, ST_MEDIUM)
+    call draw_centered
+.done:
+    add rsp, 56
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+
+; The open issue's description, or the box editing it.
+; edi = x, esi = top, edx = width -> eax = its height
+draw_description:
+    push rbp
+    push r12
+    push r14
+    push r15
+    sub rsp, 8
+    mov r14d, edi
+    mov r12d, esi
+    mov r15d, edx
+    mov [fields + F_DESC * FD_SIZE + FD_X], r14d    ; so a click can place the caret
+    mov [fields + F_DESC * FD_SIZE + FD_Y], r12d
+    mov [fields + F_DESC * FD_SIZE + FD_W], r15d
     cmp byte [detail_loaded], 0
-    je .desc_loading
+    je .loading
     cmp dword [focus], F_DESC
-    jne .desc_text
+    jne .text
     mov edi, F_DESC
     mov esi, r14d
     mov edx, r12d
     mov ecx, r15d
     call draw_area
-    jmp .desc_hit
-.desc_text:
+    jmp .hit
+.text:
     cmp dword [view_desc_len], 0
-    je .desc_empty
+    je .empty
     mov rdi, [view_desc]
     mov esi, [view_desc_len]
     mov edx, r14d
@@ -2363,8 +1906,8 @@ draw_detail:
     mov r8d, r15d
     mov r9d, INK(C_TEXT, ST_BODY)
     call draw_wrapped
-    jmp .desc_hit
-.desc_empty:
+    jmp .hit
+.empty:
     lea edi, [r14d + 2]
     lea esi, [r12d + 14]
     lea rdx, [s_desc_hint]
@@ -2372,7 +1915,7 @@ draw_detail:
     mov r8d, INK(C_FAINT, ST_BODY)
     call draw_text
     mov eax, LINE_H
-.desc_hit:
+.hit:
     mov ebp, 60
     cmp eax, ebp
     cmovg ebp, eax
@@ -2383,8 +1926,8 @@ draw_detail:
     mov r8d, A_FIELD
     mov r9d, F_DESC
     call add_hit
-    jmp .activity
-.desc_loading:
+    jmp .done
+.loading:
     mov edi, r14d
     lea esi, [r12d + 14]
     lea rdx, [s_loading]
@@ -2392,9 +1935,30 @@ draw_detail:
     mov r8d, INK(C_FAINT, ST_BODY)
     call draw_text
     mov ebp, 60
+.done:
+    mov eax, ebp
+    add rsp, 8
+    pop r15
+    pop r14
+    pop r12
+    pop rbp
+    ret
 
-.activity:
-    lea r12d, [r12d + ebp + 32]
+; The open issue's activity: who made it, its comments, and the box for
+; the next one. rdi = view issue, esi = x, edx = top, ecx = width
+; -> eax = the y under the comment box's hint
+draw_activity:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 8
+    mov rbx, rdi
+    mov r14d, esi
+    mov r12d, edx
+    mov r15d, ecx
     mov edi, r14d
     mov esi, r12d
     mov edx, r15d
@@ -2429,18 +1993,21 @@ draw_detail:
     call put_mem
     mov esi, [rbx + CI_CREATED]
     call put_ago
+    lea rdx, [scratch]
     mov rcx, rdi
+    sub rcx, rdx
     lea edi, [r14d + 28]
     lea esi, [r12d + 14]
     mov r8d, INK(C_DIM, ST_SMALL)
-    call draw_scratch
+    lea r9d, [r15d - 28]
+    call draw_text_fit
     add r12d, 36
 
     lea r13, [view_comments]
     mov eax, [view_comment_count]
-    mov [rsp + 36], eax
+    mov [rsp], eax
 .comment:
-    cmp dword [rsp + 36], 0
+    cmp dword [rsp], 0
     je .compose
     mov edi, [r13 + CC_AUTHOR]
     call user_name
@@ -2458,12 +2025,12 @@ draw_detail:
     lea esi, [r12d + 14]
     mov r8d, INK(C_TEXT, ST_MEDIUM)
     call draw_text
-    mov [rsp + 40], eax
+    mov [rsp + 4], eax
     lea rdi, [scratch]
     mov esi, [r13 + CC_CREATED]
     call put_ago
     mov rcx, rdi
-    mov edi, [rsp + 40]
+    mov edi, [rsp + 4]
     add edi, 8
     lea esi, [r12d + 14]
     mov r8d, INK(C_FAINT, ST_SMALL)
@@ -2480,10 +2047,36 @@ draw_detail:
     call draw_wrapped
     lea r12d, [r12d + eax + 44]
     add r13, CC_SIZE
-    dec dword [rsp + 36]
+    dec dword [rsp]
     jmp .comment
 
 .compose:
+    mov edi, r14d
+    mov esi, r12d
+    mov edx, r15d
+    call draw_comment_box
+    add rsp, 8
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+
+; The box for the next comment, with a hint under it while it's focused.
+; edi = x, esi = top, edx = width -> eax = the y under it
+draw_comment_box:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 8
+    mov r14d, edi
+    mov r12d, esi
+    mov r15d, edx
     mov edi, F_COMMENT
     call field_addr
     mov rdi, [rax + FD_BUF]
@@ -2520,32 +2113,16 @@ draw_detail:
     call draw_area
     lea r12d, [r12d + ebp + 8]
     test r13d, r13d
-    jz .measured
+    jz .done
     mov edi, r14d
     lea esi, [r12d + 12]
     lea rdx, [s_enter_send]
     mov ecx, s_enter_send_len
     mov r8d, INK(C_FAINT, ST_SMALL)
     call draw_text
-.measured:
-    add r12d, 48
-    sub r12d, [rsp + 32]
-    mov [content_h], r12d
-    mov rdi, [rsp + 16]
-    call restore_clip
-    jmp .done
-.gone:
-    ; Opened but not in the view yet, or about to close.
-    mov edi, [rsp]
-    mov esi, [rsp + 8]
-    mov edx, [rsp + 4]
-    add edx, 80
-    lea rcx, [s_loading]
-    mov r8d, s_loading_len
-    mov r9d, INK(C_DIM, ST_MEDIUM)
-    call draw_centered
 .done:
-    add rsp, 56
+    mov eax, r12d
+    add rsp, 8
     pop r15
     pop r14
     pop r13
@@ -2734,7 +2311,7 @@ draw_create:
     lea rdx, [s_create_issue]
     mov ecx, s_create_issue_len
     mov r8d, A_CREATE
-    mov r9d, 1
+    mov r9d, BTN_PRIMARY
     call draw_button
     add rsp, 8
     pop r15
@@ -2790,7 +2367,7 @@ draw_team_modal:
     lea rdx, [s_create_team]
     mov ecx, s_create_team_len
     mov r8d, A_CREATE_TEAM
-    mov r9d, 1
+    mov r9d, BTN_PRIMARY
     call draw_button
     add rsp, 8
     pop r12
@@ -2937,7 +2514,7 @@ draw_app:
     lea rdx, [s_create_team]
     mov ecx, s_create_team_len
     mov r8d, A_NEW_TEAM
-    mov r9d, 1
+    mov r9d, BTN_PRIMARY
     call draw_button
 .modal:
     call reset_clip
@@ -2962,10 +2539,18 @@ draw_app:
 render:
     cmp byte [configured], 0
     je .done
-    push rbx
     call wl_acquire_buffer
     test rax, rax
-    jz .busy
+    jz .done
+    call draw_frame
+    call wl_present
+    mov byte [need_redraw], 0
+    call update_hover
+.done:
+    ret
+
+; Draws everything into fb and rebuilds the hit regions.
+draw_frame:
     call reset_clip
     mov dword [hit_count], 0
     cmp byte [list_dirty], 0
@@ -2987,13 +2572,7 @@ render:
 .overlays:
     call draw_toast
     cmp byte [menu_open], 0
-    je .present
+    je .done
     call draw_menu
-.present:
-    call wl_present
-    mov byte [need_redraw], 0
-    call update_hover
-.busy:
-    pop rbx
 .done:
     ret

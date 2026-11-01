@@ -1,7 +1,7 @@
 ; The window's state: fields, selection, the list and board, menus and
-; modals. Keys and clicks are handled in input.asm, drawing lives in
-; widgets.asm (fields, menus, formatting), views.asm (the screens) and
-; chat.asm (conversations).
+; modals. Keys and clicks are handled in input.asm, menus in menu.asm, and
+; drawing lives in widgets.asm (fields, formatting), views.asm (the screens)
+; and chat.asm (conversations).
 ;
 ; Keyboard first: with no text field focused, letters are shortcuts.
 ;   c new issue    j/k or arrows move    Enter open    Esc back
@@ -16,6 +16,8 @@
 %define ROW_H           38
 %define GROUP_H         36
 %define PROPS_W         256
+%define PROPS_NARROW_W  232             ; in a detail view narrower than DETAIL_NARROW
+%define DETAIL_NARROW   760
 %define CARD_GAP        8
 %define COL_MIN_W       200
 %define LINE_H          20              ; wrapped body text
@@ -23,6 +25,9 @@
 %define MENU_ROW_H      36
 %define MENU_MAX        96
 %define MENU_SHOWN      9               ; rows visible at once
+%define WHEEL_NOTCH     15              ; pixels compositors report per wheel notch
+%define BTN_PRIMARY     1               ; draw_button kinds, 0 is the outlined one
+%define BTN_DANGER      2
 %define MODAL_W         640
 
 %define C_BG            0x0b0c0e
@@ -38,6 +43,7 @@
 %define C_ACCENT        0x5e6ad2
 %define C_ACCENT_HI     0x717ce0
 %define C_DANGER        0xeb5757
+%define C_DANGER_HI     0xf07070
 %define C_ONLINE        0x4cb782
 %define C_SHADE         0x070809        ; behind a modal
 
@@ -88,7 +94,11 @@
 %define FD_STYLE        28
 %define FD_HINT         32              ; qword, the placeholder
 %define FD_HINT_LEN     40
-%define FD_SIZE         48
+%define FD_X            44              ; where its text was last drawn, for clicks
+%define FD_Y            48              ; the top, wrapped text only
+%define FD_W            52              ; 0 until it's drawn
+%define FD_SIZE         56
+fits FD_W, 4, FD_SIZE
 %define FF_MASKED       1
 %define FF_MULTILINE    2
 
@@ -222,7 +232,7 @@ text s_message_hint,    "Write a message..."
     dq %1
     dd %2, 0, 0, 0, %3, %4
     dq %5
-    dd %5_len, 0
+    dd %5_len, 0, 0, 0
 %endmacro
 
 align 8
@@ -295,6 +305,8 @@ menu_issue:     resd 1                  ; what the menu changes, 0 for the new i
 menu_sel:       resd 1
 menu_scroll:    resd 1
 menu_count:     resd 1
+menu_wheel:     resd 1                  ; wheel pixels short of a whole notch
+delete_armed:   resd 1                  ; the issue whose Delete was clicked once, or 0
 menu_items:     resb MENU_MAX * MI_SIZE
 view_mode:      resd 1
 filter_project: resd 1                  ; a project number, or 0
@@ -493,8 +505,13 @@ ui_team_opened:
     mov dword [filter_label], -1
     mov [menu_open], al
     cmp byte [modal], M_TEAM
-    jne .focus
+    jne .draft
     mov [modal], al                         ; the team we were creating is here
+.draft:
+    mov edi, F_MESSAGE                      ; drafts belong to the old team
+    call field_clear
+    mov edi, F_MEMBER
+    call field_clear
 .focus:
     mov eax, [focus]
     cmp eax, F_USER
@@ -527,8 +544,24 @@ ui_view_changed:
 
 ; --- hit regions ---
 
+; Cut to the clip like the pixels are, so whatever scrolled out of sight
+; under a header can't be clicked through it.
 ; edi = x, esi = y, edx = w, ecx = h, r8d = action, r9d = arg
 add_hit:
+    add edx, edi                            ; right and bottom edges
+    add ecx, esi
+    cmp edi, [clip_x0]
+    cmovl edi, [clip_x0]
+    cmp esi, [clip_y0]
+    cmovl esi, [clip_y0]
+    cmp edx, [clip_x1]
+    cmovg edx, [clip_x1]
+    cmp ecx, [clip_y1]
+    cmovg ecx, [clip_y1]
+    sub edx, edi
+    jle .full
+    sub ecx, esi
+    jle .full
     mov eax, [hit_count]
     cmp eax, HIT_MAX
     jae .full
@@ -1037,7 +1070,10 @@ list_height:
 ; Keeps a scroll offset within what last frame's content needs.
 ; rdi = the offset, esi = visible height
 clamp_scroll:
-    mov eax, [content_h]
+    mov edx, [content_h]
+; rdi = the offset, esi = visible height, edx = content height
+clamp_scroll_to:
+    mov eax, edx
     sub eax, esi
     xor ecx, ecx
     cmp eax, ecx
@@ -1051,51 +1087,13 @@ clamp_scroll:
     mov [rdi], ecx
     ret
 
-; --- menus ---
-
-; Opens a menu. edi = MK_*, esi = the issue it changes (0: the draft)
-open_menu:
-    mov [menu_kind], edi
-    mov [menu_issue], esi
-    mov byte [menu_open], 1
-    xor eax, eax
-    mov [menu_sel], eax
-    mov [menu_scroll], eax
-    mov edi, F_MENU
-    call field_clear
-    mov edi, F_MENU
-    jmp set_focus
-
-close_menu:
-    mov byte [menu_open], 0
-    mov edi, F_NONE
-    cmp byte [modal], M_CREATE
-    jne .focus
-    mov edi, F_NEW_TITLE
-.focus:
-    jmp set_focus
-
-; Opens a property menu for whatever shortcuts act on. edi = MK_*
-pick_for_target:
-    push rbx
-    mov ebx, edi
-    call target_issue
-    test eax, eax
-    jz .done
-    mov edi, ebx
-    mov esi, eax
-    call open_menu
-.done:
-    pop rbx
-    ret
-
 ; --- input ---
 
 ; A held card starts moving once the pointer travels DRAG_SLOP, so a
 ; click with a shaky hand still opens it.
 ui_pointer_moved:
     cmp dword [drag_id], 0
-    je update_hover
+    je pointer_hover
     cmp byte [pointer_inside], 0
     je .cancel
     cmp byte [drag_moving], 0
@@ -1123,6 +1121,23 @@ ui_pointer_moved:
     call cancel_drag
     jmp update_hover
 
+; Hover follows the pointer, and a menu's selection follows it too, but only
+; when it moves. One resting over a menu leaves the arrow keys alone.
+pointer_hover:
+    call update_hover
+    cmp byte [menu_open], 0
+    je .done
+    cmp dword [hover_action], A_MENU_ITEM
+    jne .done
+    mov eax, [hover_arg]
+    cmp eax, [menu_sel]
+    je .done
+    mov [menu_sel], eax
+    mov byte [need_redraw], 1
+.done:
+    ret
+
+; Lets go of a held card without moving it.
 cancel_drag:
     mov dword [drag_id], 0
     mov byte [drag_moving], 0
@@ -1369,12 +1384,13 @@ select_team:
     call sync_select_team
     jmp ui_team_opened
 
-; Starts editing the open issue's title or description. edi = F_TITLE or F_DESC
+; Starts editing the open issue's title or description at the pointer, or
+; moves the caret if it already is. edi = F_TITLE or F_DESC
 begin_edit:
+    cmp [focus], edi
+    je place_caret
     push rbx
     mov ebx, edi
-    cmp [focus], ebx
-    je .done
     mov edi, [detail_issue]
     call find_view_issue
     test rax, rax
@@ -1392,100 +1408,17 @@ begin_edit:
     call field_set
     mov edi, ebx
     call set_focus
+    ; It was showing wrapped until now, the title 28px apart.
+    cmp ebx, F_TITLE
+    jne .caret
+    mov dword [wrap_lh], 28
+.caret:
+    mov edi, ebx
+    call field_addr
+    mov rbx, rax
+    mov rdi, rax
+    call wrapped_caret_at
+    mov [rbx + FD_CURSOR], eax
 .done:
-    pop rbx
-    ret
-
-; Applies a chosen menu item. edi = item index
-choose_item:
-    push rbx
-    push r12
-    push r13
-    cmp edi, [menu_count]
-    jae .done
-    imul eax, edi, MI_SIZE
-    lea rbx, [menu_items + rax]
-    mov r12d, [rbx + MI_VALUE]
-    mov r13d, [menu_issue]
-    mov eax, [menu_kind]
-    cmp eax, MK_COMMAND
-    je .command
-    cmp eax, MK_FILTER
-    je .filter
-    cmp eax, MK_LABELS
-    je .labels
-    cmp eax, MK_PROJECT
-    jne .field
-    cmp byte [rbx + MI_ICON], IC_PLUS
-    jne .field
-    call create_project                     ; -> eax = its number, or 0
-    test eax, eax
-    jz .close
-    mov r12d, eax
-.field:
-    ; MK_STATUS..MK_PROJECT line up with FIELD_STATUS..FIELD_PROJECT.
-    mov esi, [menu_kind]
-    inc esi
-    test r13d, r13d
-    jz .draft
-    mov edi, r13d
-    mov edx, r12d
-    call sync_set_field
-    jmp .close
-.draft:
-    mov [new_status + rsi * 4 - 4], r12d    ; new_status..new_project are in field order
-    jmp .close
-.labels:
-    cmp byte [rbx + MI_ICON], IC_PLUS
-    jne .toggle
-    call create_label                       ; -> eax = its slot, or -1
-    test eax, eax
-    js .done
-    mov r12d, eax
-.toggle:
-    mov eax, 1
-    mov ecx, r12d
-    shl eax, cl
-    test r13d, r13d
-    jz .draft_labels
-    mov r12d, eax
-    mov edi, r13d
-    call find_view_issue
-    test rax, rax
-    jz .close
-    movzx edx, word [rax + CI_LABELS]
-    xor edx, r12d
-    mov edi, r13d
-    mov esi, FIELD_LABELS
-    call sync_set_field
-    jmp .keep_open
-.draft_labels:
-    xor [new_labels], eax
-.keep_open:
-    mov edi, F_MENU                         ; labels stay open for more picks
-    call field_clear
-    jmp .done
-.filter:
-    test r12d, r12d
-    js .filter_label
-    mov [filter_project], r12d
-    jmp .refilter
-.filter_label:
-    not r12d
-    mov [filter_label], r12d
-.refilter:
-    mov byte [list_dirty], 1
-    jmp .close
-.command:
-    call close_menu
-    mov edi, r12d
-    call run_command
-    jmp .done
-.close:
-    call close_menu
-.done:
-    mov byte [need_redraw], 1
-    pop r13
-    pop r12
     pop rbx
     ret

@@ -1,5 +1,5 @@
 ; Pieces the screens are built from: names and dates, wrapped text, text
-; fields, buttons, chips and the menu.
+; fields, buttons and chips. The menus are in menu.asm.
 
 section .rodata
 text s_backlog,         "Backlog"
@@ -16,8 +16,6 @@ text s_unknown_user,    "Unknown"
 text s_no_assignee,     "No assignee"
 text s_no_project,      "No project"
 text s_general,         "#general"
-text s_create_label,    "Create label: "
-text s_create_project,  "Create project: "
 text s_just_now,        "just now"
 text s_m_ago,           "m ago"
 text s_h_ago,           "h ago"
@@ -38,73 +36,6 @@ priority_names: NAME s_no_priority
                 NAME s_high
                 NAME s_medium
                 NAME s_low
-
-text c_new_issue,       "Create new issue"
-text c_board,           "Switch to board view"
-text c_list,            "Switch to list view"
-text c_status,          "Change status"
-text c_priority,        "Change priority"
-text c_assign,          "Assign to"
-text c_project,         "Move to project"
-text c_labels,          "Change labels"
-text c_delete,          "Delete issue"
-text c_all,             "Go to all issues"
-text c_active,          "Go to active issues"
-text c_backlog,         "Go to backlog"
-text c_mine,            "Go to my issues"
-text c_chat,            "Go to #general"
-text c_filter,          "Filter by label or project"
-text c_clear,           "Clear filters"
-text c_new_team,        "Create new team"
-text c_log_out,         "Log out"
-
-text h_status,          "Change status..."
-text h_priority,        "Set priority..."
-text h_assignee,        "Assign to..."
-text h_project,         "Move to project..."
-text h_labels,          "Add or remove labels..."
-text h_filter,          "Filter by..."
-text h_command,         "Type a command or search..."
-menu_hints:     NAME h_status
-                NAME h_priority
-                NAME h_assignee
-                NAME h_project
-                NAME h_labels
-                NAME h_filter
-                NAME h_command
-
-; The command menu, top to bottom: text, value, hint key, and when it shows.
-%define WHEN_ALWAYS     0
-%define WHEN_ISSUE      1               ; there's an issue to act on
-%define WHEN_LIST       2               ; in the list layout
-%define WHEN_BOARD      3
-%define WHEN_FILTERED   4
-%macro COMMAND 4
-    dq %1
-    dd %1_len, %2
-    db %3, %4, 0, 0, 0, 0, 0, 0
-%endmacro
-commands:
-    COMMAND c_new_issue, CMD_NEW_ISSUE, 'C', WHEN_ALWAYS
-    COMMAND c_status, CMD_PICK + MK_STATUS, 'S', WHEN_ISSUE
-    COMMAND c_priority, CMD_PICK + MK_PRIORITY, 'P', WHEN_ISSUE
-    COMMAND c_assign, CMD_PICK + MK_ASSIGNEE, 'A', WHEN_ISSUE
-    COMMAND c_labels, CMD_PICK + MK_LABELS, 'L', WHEN_ISSUE
-    COMMAND c_project, CMD_PICK + MK_PROJECT, 'M', WHEN_ISSUE
-    COMMAND c_delete, CMD_DELETE, 0, WHEN_ISSUE
-    COMMAND c_board, CMD_LAYOUT, 0, WHEN_LIST
-    COMMAND c_list, CMD_LAYOUT, 0, WHEN_BOARD
-    COMMAND c_all, CMD_VIEW + V_ALL, 0, WHEN_ALWAYS
-    COMMAND c_active, CMD_VIEW + V_ACTIVE, 0, WHEN_ALWAYS
-    COMMAND c_backlog, CMD_VIEW + V_BACKLOG, 0, WHEN_ALWAYS
-    COMMAND c_mine, CMD_VIEW + V_MINE, 0, WHEN_ALWAYS
-    COMMAND c_chat, CMD_CHAT, 0, WHEN_ALWAYS
-    COMMAND c_filter, CMD_FILTER, 0, WHEN_ALWAYS
-    COMMAND c_clear, CMD_CLEAR, 0, WHEN_FILTERED
-    COMMAND c_new_team, CMD_NEW_TEAM, 0, WHEN_ALWAYS
-    COMMAND c_log_out, CMD_LOGOUT, 0, WHEN_ALWAYS
-    dq 0
-%define COMMAND_SIZE 24
 
 section .data
 wrap_caret:     dd -1                   ; offset to draw the caret at in draw_wrapped, or -1
@@ -532,6 +463,8 @@ draw_field:
     mov edi, [rsp]
     call field_addr
     mov rbx, rax
+    mov [rbx + FD_X], r12d
+    mov [rbx + FD_W], r14d
     lea edi, [r12d - 1]
     lea esi, [r13d - 30]
     lea edx, [r12d + r14d + 1]
@@ -608,6 +541,134 @@ draw_field:
     pop rbx
     ret
 
+; Which character x falls before on one line of text.
+; rdi = text, esi = length, edx = style, ecx = x from the line's start -> eax
+line_index_at:
+    push rbx
+    push r12
+    push r13
+    mov rbx, rdi
+    mov r12d, esi
+    imul r13d, edx, GLYPH_COUNT
+    lea r8d, [ecx * 4]                      ; quarter pixels, like adv4
+    xor ecx, ecx                            ; width so far
+    xor r9d, r9d
+.char:
+    cmp r9d, r12d
+    jae .done
+    movzx edi, byte [rbx + r9]
+    call glyph_index
+    add eax, r13d
+    mov eax, [adv4 + rax * 4]
+    mov edx, eax
+    shr edx, 1
+    add edx, ecx
+    cmp r8d, edx
+    jl .done                                ; left of this character's middle
+    add ecx, eax
+    inc r9d
+    jmp .char
+.done:
+    mov eax, r9d
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Which character the pointer is at in a field's text, wrapped the way
+; draw_wrapped laid it out at FD_X, FD_Y, wrap_lh apart. Resets wrap_lh.
+; rdi = field struct -> eax = the offset
+wrapped_caret_at:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 8
+    mov rbx, rdi
+    mov r12, [rbx + FD_BUF]
+    mov r13d, [rbx + FD_LEN]
+    mov r14d, [pointer_y]
+    sub r14d, [rbx + FD_Y]
+    mov eax, r13d                           ; never drawn: the end
+    cmp dword [rbx + FD_W], 0
+    je .done
+    xor ebp, ebp                            ; where the line starts
+.line:
+    lea rsi, [r12 + rbp]
+    mov edx, r13d
+    sub edx, ebp
+    mov ecx, [rbx + FD_W]
+    mov r8d, [rbx + FD_STYLE]
+    call wrap_line
+    mov r15d, eax
+    sub r14d, [wrap_lh]
+    js .found
+    lea ecx, [ebp + edx]
+    cmp ecx, r13d
+    jae .last
+    mov ebp, ecx
+    jmp .line
+.last:
+    ; Under the text. After a final newline that's the empty line there.
+    test r13d, r13d
+    jz .found
+    mov eax, r13d
+    cmp byte [r12 + r13 - 1], 10
+    je .done
+.found:
+    lea rdi, [r12 + rbp]
+    mov esi, r15d
+    mov edx, [rbx + FD_STYLE]
+    mov ecx, [pointer_x]
+    sub ecx, [rbx + FD_X]
+    call line_index_at
+    add eax, ebp
+.done:
+    mov dword [wrap_lh], LINE_H
+    add rsp, 8
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+
+; Moves a field's caret to where the pointer is. edi = field
+place_caret:
+    push rbx
+    call field_addr
+    mov rbx, rax
+    mov rdi, rax
+    test dword [rbx + FD_FLAGS], FF_MULTILINE
+    jnz .wrapped
+    mov eax, [rbx + FD_LEN]
+    cmp dword [rbx + FD_W], 0
+    je .done
+    mov rdi, [rbx + FD_BUF]
+    test dword [rbx + FD_FLAGS], FF_MASKED
+    jz .shown
+    lea rdi, [mask_buf]
+.shown:
+    mov eax, [rbx + FD_SCROLL]
+    add rdi, rax
+    mov esi, [rbx + FD_LEN]
+    sub esi, eax
+    mov edx, [rbx + FD_STYLE]
+    mov ecx, [pointer_x]
+    sub ecx, [rbx + FD_X]
+    call line_index_at
+    add eax, [rbx + FD_SCROLL]
+    jmp .done
+.wrapped:
+    call wrapped_caret_at
+.done:
+    mov [rbx + FD_CURSOR], eax
+    pop rbx
+    ret
+
 ; A multi-line field: wrapped text, or its placeholder, and the caret.
 ; edi = field, esi = x, edx = top, ecx = width -> eax = height used
 draw_area:
@@ -622,6 +683,9 @@ draw_area:
     mov r14d, ecx
     call field_addr
     mov rbx, rax
+    mov [rbx + FD_X], r12d
+    mov [rbx + FD_Y], r13d
+    mov [rbx + FD_W], r14d
     mov edi, r15d
     call field_focused
     test eax, eax
@@ -666,7 +730,7 @@ draw_area:
     ret
 
 ; A button. edi = x, esi = y, rdx = text, ecx = length, r8d = action,
-; r9d = 1 for the accent-filled primary kind -> eax = its width
+; r9d = 0 outlined, BTN_PRIMARY or BTN_DANGER -> eax = its width
 draw_button:
     push rbx
     push rbp
@@ -695,6 +759,11 @@ draw_button:
     jz .secondary
     mov r8d, C_ACCENT
     mov eax, C_ACCENT_HI
+    cmp r15d, BTN_DANGER
+    jne .fill
+    mov r8d, C_DANGER
+    mov eax, C_DANGER_HI
+.fill:
     test ecx, ecx
     cmovnz r8d, eax
     mov edi, r12d
@@ -740,10 +809,17 @@ draw_button:
     pop rbx
     ret
 
+; A filter chip that ends in an X to remove it. Takes what draw_chip does.
+draw_removable_chip:
+    mov r9d, 1
+    jmp chip
 ; A small rounded chip: an optional colored dot and some text, 24px tall.
 ; edi = x, esi = y, rdx = text, ecx = length, r8d = dot color, or -1 for none
 ; -> eax = its width
 draw_chip:
+    xor r9d, r9d
+; The same, r9d = 1 to end in an X
+chip:
     push rbx
     push rbp
     push r12
@@ -755,11 +831,14 @@ draw_chip:
     mov rbx, rdx
     mov ebp, ecx
     mov r14d, r8d
+    mov [rsp + 8], r9d
     mov rdi, rbx
     mov esi, ebp
     mov edx, ST_SMALL
     call text_width
     lea eax, [eax + 18]
+    imul ecx, [rsp + 8], 14                 ; room for the X
+    add eax, ecx
     xor ecx, ecx
     test r14d, r14d
     js .no_dot
@@ -791,6 +870,16 @@ draw_chip:
     mov ecx, ebp
     mov r8d, INK(C_DIM, ST_SMALL)
     call draw_text
+    cmp dword [rsp + 8], 0
+    je .done
+    mov edi, r12d
+    add edi, [rsp]
+    sub edi, 14
+    lea esi, [r13d + 12]
+    mov edx, 12
+    mov ecx, C_DIM
+    call draw_cross
+.done:
     mov eax, [rsp]
     add rsp, 16
     pop r14
@@ -850,452 +939,6 @@ shade_screen:
     dec ecx
     jmp .pixel
 .done:
-    ret
-
-; --- the menu ---
-
-; -> the menu's current value for the issue or draft it changes: eax for
-; single choices, the label bitmask for labels
-menu_current:
-    mov edi, [menu_issue]
-    test edi, edi
-    jz .draft
-    call find_view_issue
-    test rax, rax
-    jz .none
-    mov ecx, [menu_kind]
-    movzx edx, byte [rax + CI_STATUS]
-    cmp ecx, MK_STATUS
-    je .edx
-    movzx edx, byte [rax + CI_PRIORITY]
-    cmp ecx, MK_PRIORITY
-    je .edx
-    mov edx, [rax + CI_ASSIGNEE]
-    cmp ecx, MK_ASSIGNEE
-    je .edx
-    movzx edx, byte [rax + CI_PROJECT]
-    cmp ecx, MK_PROJECT
-    je .edx
-    movzx edx, word [rax + CI_LABELS]
-.edx:
-    mov eax, edx
-    ret
-.draft:
-    mov ecx, [menu_kind]
-    cmp ecx, MK_LABELS
-    ja .none
-    mov eax, [new_status + rcx * 4]
-    ret
-.none:
-    mov eax, -1
-    ret
-
-; Adds an item if it matches the filter text.
-; rdi = text, esi = length, edx = value, ecx = icon, r8d = icon arg,
-; r9d = checked | hint << 8
-push_item:
-    push rbx
-    push r12
-    push r13
-    push r14
-    push r15
-    mov rbx, rdi
-    mov r12d, esi
-    mov r13d, edx
-    mov r14d, ecx
-    mov r15d, r8d
-    push r9
-    push r9
-    cmp dword [menu_count], MENU_MAX
-    jae .skip
-    cmp r14d, IC_PLUS
-    je .add                                 ; "create" items carry the filter text itself
-    mov rdi, rbx
-    mov esi, r12d
-    call matches_filter
-    test eax, eax
-    jz .skip
-.add:
-    mov eax, [menu_count]
-    inc dword [menu_count]
-    imul eax, eax, MI_SIZE
-    lea rax, [menu_items + rax]
-    mov [rax + MI_TEXT], rbx
-    mov [rax + MI_LEN], r12d
-    mov [rax + MI_ICON], r14d
-    mov [rax + MI_ICON_ARG], r15d
-    mov [rax + MI_VALUE], r13d
-    mov rcx, [rsp]
-    mov [rax + MI_CHECK], cl
-    mov [rax + MI_HINT], ch
-.skip:
-    add rsp, 16
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    ret
-
-; rdi = text, esi = length -> eax = 1 if the menu's filter text is in it, any case
-matches_filter:
-    mov rdx, [fields + F_MENU * FD_SIZE + FD_BUF]
-    mov ecx, [fields + F_MENU * FD_SIZE + FD_LEN]
-    mov eax, 1
-    test ecx, ecx
-    jz .done
-    xor r8d, r8d                            ; start in the text
-.start:
-    mov eax, esi
-    sub eax, r8d
-    cmp eax, ecx
-    jl .no
-    xor r9d, r9d
-.char:
-    cmp r9d, ecx
-    jae .yes
-    lea eax, [r8d + r9d]
-    movzx eax, byte [rdi + rax]
-    movzx r10d, byte [rdx + r9]
-    or eax, 0x20
-    or r10d, 0x20
-    cmp eax, r10d
-    jne .next_start
-    inc r9d
-    jmp .char
-.next_start:
-    inc r8d
-    jmp .start
-.yes:
-    mov eax, 1
-    ret
-.no:
-    xor eax, eax
-.done:
-    ret
-
-; rdi = names (labels or projects), esi = slot size, edx = slot count
-; -> eax = 1 if one is named exactly the filter text, any case
-filter_names_exist:
-    push rbx
-    push r12
-    push r13
-    mov rbx, rdi
-    mov r12d, esi
-    mov r13d, edx
-.slot:
-    test r13d, r13d
-    jz .no
-    movzx esi, byte [rbx + LB_NAME_LEN]
-    cmp esi, [fields + F_MENU * FD_SIZE + FD_LEN]
-    jne .next
-    lea rdi, [rbx + LB_NAME]
-    call matches_filter
-    test eax, eax
-    jnz .done
-.next:
-    add rbx, r12
-    dec r13d
-    jmp .slot
-.no:
-    xor eax, eax
-.done:
-    pop r13
-    pop r12
-    pop rbx
-    ret
-
-; Fills menu_items for the open menu and its filter text.
-build_menu:
-    push rbx
-    push rbp
-    push r12
-    push r13
-    push r14
-    push r15
-    sub rsp, 8
-    mov dword [menu_count], 0
-    call menu_current
-    mov r15d, eax
-    mov eax, [menu_kind]
-    cmp eax, MK_STATUS
-    je .status
-    cmp eax, MK_PRIORITY
-    je .priority
-    cmp eax, MK_ASSIGNEE
-    je .assignee
-    cmp eax, MK_PROJECT
-    je .project
-    cmp eax, MK_LABELS
-    je .labels
-    cmp eax, MK_FILTER
-    je .filter
-    jmp .commands
-
-.status:
-    xor ebx, ebx
-.status_item:
-    movzx r12d, byte [board_order + rbx]
-    mov edi, r12d
-    call status_name
-    mov rdi, rsi
-    mov esi, edx
-    mov edx, r12d
-    mov ecx, IC_STATUS
-    mov r8d, r12d
-    xor r9d, r9d
-    cmp r12d, r15d
-    sete r9b
-    call push_item
-    inc ebx
-    cmp ebx, STATUS_COUNT
-    jb .status_item
-    jmp .done
-
-.priority:
-    xor ebx, ebx
-.priority_item:
-    mov edi, ebx
-    call priority_name
-    mov rdi, rsi
-    mov esi, edx
-    mov edx, ebx
-    mov ecx, IC_PRIORITY
-    mov r8d, ebx
-    xor r9d, r9d
-    cmp ebx, r15d
-    sete r9b
-    call push_item
-    inc ebx
-    cmp ebx, PRIO_COUNT
-    jb .priority_item
-    jmp .done
-
-.assignee:
-    lea rdi, [s_no_assignee]
-    mov esi, s_no_assignee_len
-    xor edx, edx
-    mov ecx, IC_AVATAR
-    xor r8d, r8d
-    xor r9d, r9d
-    test r15d, r15d
-    sete r9b
-    call push_item
-    lea rbx, [members]
-    mov ebp, [member_count]
-.member:
-    test ebp, ebp
-    jz .done
-    lea rdi, [rbx + CM_NAME]
-    movzx esi, byte [rbx + CM_NAME_LEN]
-    mov edx, [rbx + CM_ID]
-    mov ecx, IC_AVATAR
-    mov r8d, edx
-    xor r9d, r9d
-    cmp edx, r15d
-    sete r9b
-    call push_item
-    add rbx, CM_SIZE
-    dec ebp
-    jmp .member
-
-.project:
-    lea rdi, [s_no_project]
-    mov esi, s_no_project_len
-    xor edx, edx
-    mov ecx, IC_DOT
-    mov r8d, C_FAINT
-    xor r9d, r9d
-    test r15d, r15d
-    sete r9b
-    call push_item
-    lea rbx, [view_projects]
-    mov ebp, 1
-.project_item:
-    movzx esi, byte [rbx + LB_NAME_LEN]
-    test esi, esi
-    jz .next_project
-    lea rdi, [rbx + LB_NAME]
-    mov edx, ebp
-    mov ecx, IC_DOT
-    mov r8d, [rbx + LB_COLOR]
-    xor r9d, r9d
-    cmp ebp, r15d
-    sete r9b
-    call push_item
-.next_project:
-    add rbx, PJ_SIZE
-    inc ebp
-    cmp ebp, PROJECT_SLOTS
-    jbe .project_item
-    lea rdi, [view_projects]
-    mov esi, PJ_SIZE
-    mov edx, PROJECT_SLOTS
-    lea r12, [s_create_project]
-    mov r13d, s_create_project_len
-    jmp .create
-
-.labels:
-    lea rbx, [view_labels]
-    xor ebp, ebp
-.label_item:
-    movzx esi, byte [rbx + LB_NAME_LEN]
-    test esi, esi
-    jz .next_label
-    lea rdi, [rbx + LB_NAME]
-    mov edx, ebp
-    mov ecx, IC_DOT
-    mov r8d, [rbx + LB_COLOR]
-    xor r9d, r9d
-    bt r15d, ebp
-    setc r9b
-    call push_item
-.next_label:
-    add rbx, LB_SIZE
-    inc ebp
-    cmp ebp, LABEL_SLOTS
-    jb .label_item
-    lea rdi, [view_labels]
-    mov esi, LB_SIZE
-    mov edx, LABEL_SLOTS
-    lea r12, [s_create_label]
-    mov r13d, s_create_label_len
-.create:
-    ; Typed a name nothing has: offer to create it.
-    cmp dword [fields + F_MENU * FD_SIZE + FD_LEN], 0
-    je .done
-    call filter_names_exist
-    test eax, eax
-    jnz .done
-    mov rdi, r12
-    mov esi, r13d
-    xor edx, edx
-    mov ecx, IC_PLUS
-    xor r8d, r8d
-    xor r9d, r9d
-    call push_item
-    jmp .done
-
-.filter:
-    lea rbx, [view_labels]
-    xor ebp, ebp
-.filter_label:
-    movzx esi, byte [rbx + LB_NAME_LEN]
-    test esi, esi
-    jz .next_filter_label
-    lea rdi, [rbx + LB_NAME]
-    mov edx, ebp
-    not edx                                 ; labels are negative, projects positive
-    mov ecx, IC_DOT
-    mov r8d, [rbx + LB_COLOR]
-    xor r9d, r9d
-    cmp ebp, [filter_label]
-    sete r9b
-    call push_item
-.next_filter_label:
-    add rbx, LB_SIZE
-    inc ebp
-    cmp ebp, LABEL_SLOTS
-    jb .filter_label
-    lea rbx, [view_projects]
-    mov ebp, 1
-.filter_project:
-    movzx esi, byte [rbx + LB_NAME_LEN]
-    test esi, esi
-    jz .next_filter_project
-    lea rdi, [rbx + LB_NAME]
-    mov edx, ebp
-    mov ecx, IC_DOT
-    mov r8d, [rbx + LB_COLOR]
-    xor r9d, r9d
-    cmp ebp, [filter_project]
-    sete r9b
-    call push_item
-.next_filter_project:
-    add rbx, PJ_SIZE
-    inc ebp
-    cmp ebp, PROJECT_SLOTS
-    jbe .filter_project
-    jmp .done
-
-.commands:
-    call target_issue
-    mov r12d, eax
-    lea rbx, [commands]
-.command:
-    cmp qword [rbx], 0
-    je .teams
-    movzx eax, byte [rbx + 17]
-    cmp eax, WHEN_ISSUE
-    jne .when_list
-    test r12d, r12d
-    jz .next_command
-.when_list:
-    cmp eax, WHEN_LIST
-    jne .when_board
-    cmp byte [board], 0
-    jne .next_command
-.when_board:
-    cmp eax, WHEN_BOARD
-    jne .when_filtered
-    cmp byte [board], 0
-    je .next_command
-.when_filtered:
-    cmp eax, WHEN_FILTERED
-    jne .add_command
-    cmp dword [filter_project], 0
-    jne .add_command
-    cmp dword [filter_label], -1
-    je .next_command
-.add_command:
-    mov rdi, [rbx]
-    mov esi, [rbx + 8]
-    mov edx, [rbx + 12]
-    xor ecx, ecx
-    xor r8d, r8d
-    movzx r9d, byte [rbx + 16]
-    shl r9d, 8
-    call push_item
-.next_command:
-    add rbx, COMMAND_SIZE
-    jmp .command
-.teams:
-    lea rbx, [teams]
-    xor ebp, ebp
-.team:
-    cmp ebp, [team_count]
-    jae .done
-    lea rdi, [rbx + CO_NAME]
-    movzx esi, byte [rbx + CO_NAME_LEN]
-    lea edx, [ebp + CMD_TEAM]
-    mov ecx, IC_DOT
-    mov r8d, C_ACCENT
-    xor r9d, r9d
-    mov eax, [rbx + CO_ID]
-    cmp eax, [current_team]
-    sete r9b
-    call push_item
-    add rbx, CO_SIZE
-    inc ebp
-    jmp .team
-
-.done:
-    mov eax, [menu_count]
-    dec eax
-    mov ecx, [menu_sel]
-    cmp ecx, eax
-    cmovg ecx, eax
-    xor eax, eax
-    cmp ecx, eax
-    cmovl ecx, eax
-    mov [menu_sel], ecx
-    add rsp, 8
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbp
-    pop rbx
     ret
 
 ; An item's icon. rdi = item, esi = x, edx = y (icon box top)
@@ -1373,200 +1016,5 @@ draw_item_icon:
 .done:
     pop r13
     pop r12
-    pop rbx
-    ret
-
-section .rodata
-menu_check:     dd 0, 16, 10, 24, 26, 6
-section .text
-
-; The open menu, over a darkened window.
-draw_menu:
-    push rbx
-    push rbp
-    push r12
-    push r13
-    push r14
-    push r15
-    sub rsp, 24
-    call build_menu
-    call shade_screen
-    xor edi, edi
-    xor esi, esi
-    mov edx, [win_w]
-    mov ecx, [win_h]
-    mov r8d, A_DISMISS
-    xor r9d, r9d
-    call add_hit
-
-    ; The filter's placeholder says what the menu does.
-    mov eax, [menu_kind]
-    shl eax, 4
-    mov rcx, [menu_hints + rax]
-    mov [fields + F_MENU * FD_SIZE + FD_HINT], rcx
-    mov ecx, [menu_hints + rax + 8]
-    mov [fields + F_MENU * FD_SIZE + FD_HINT_LEN], ecx
-
-    ; Keep the selection in the visible rows.
-    mov eax, [menu_sel]
-    cmp eax, [menu_scroll]
-    jge .below
-    mov [menu_scroll], eax
-.below:
-    sub eax, MENU_SHOWN - 1
-    cmp eax, [menu_scroll]
-    jle .scrolled
-    mov [menu_scroll], eax
-.scrolled:
-    mov ebp, [menu_count]
-    sub ebp, [menu_scroll]
-    cmp ebp, MENU_SHOWN
-    jle .rows_known
-    mov ebp, MENU_SHOWN
-.rows_known:
-    mov r12d, [win_w]                       ; x
-    sub r12d, MENU_W
-    sar r12d, 1
-    mov r13d, 90                            ; y
-    xor r14d, r14d                          ; context line height
-    cmp dword [menu_issue], 0
-    je .box
-    mov r14d, 30
-.box:
-    imul ecx, ebp, MENU_ROW_H
-    lea ecx, [ecx + r14d + 66]
-    mov [rsp], ecx                          ; menu height
-    mov edi, r12d
-    mov esi, r13d
-    mov edx, MENU_W
-    mov r8d, C_LINE
-    mov r9d, C_RAISED
-    mov r10d, 10
-    call outline_rrect
-    mov edi, r12d
-    mov esi, r13d
-    mov edx, MENU_W
-    mov ecx, [rsp]
-    mov r8d, A_BLOCK
-    xor r9d, r9d
-    call add_hit
-
-    test r14d, r14d
-    jz .input
-    mov edi, [menu_issue]                   ; which issue this changes
-    call find_view_issue
-    test rax, rax
-    jz .input
-    mov rbx, rax
-    lea rdi, [scratch]
-    mov rsi, rbx
-    call put_issue_id
-    mov byte [rdi], ' '
-    inc rdi
-    lea rsi, [rbx + CI_TITLE]
-    movzx edx, byte [rbx + CI_TITLE_LEN]
-    call put_mem
-    lea rdx, [scratch]
-    mov rcx, rdi
-    sub rcx, rdx
-    lea edi, [r12d + 16]
-    lea esi, [r13d + 24]
-    mov r8d, INK(C_DIM, ST_SMALL)
-    mov r9d, MENU_W - 32
-    call draw_text_fit
-.input:
-    mov edi, F_MENU
-    lea esi, [r12d + 18]
-    lea edx, [r13d + r14d + 30]
-    mov ecx, MENU_W - 36
-    call draw_field
-    lea edi, [r12d + 1]
-    lea esi, [r13d + r14d + 50]
-    mov edx, MENU_W - 2
-    mov ecx, 1
-    mov r8d, C_LINE
-    call fill_rect
-
-    lea r15d, [r13d + r14d + 58]            ; first row
-    mov ebx, [menu_scroll]
-    mov [rsp + 4], ebp
-.row:
-    cmp dword [rsp + 4], 0
-    je .done
-    mov edi, A_MENU_ITEM
-    mov esi, ebx
-    call hovering
-    test eax, eax
-    jz .highlight
-    mov [menu_sel], ebx                     ; the pointer moves the selection
-.highlight:
-    cmp ebx, [menu_sel]
-    jne .item
-    lea edi, [r12d + 6]
-    mov esi, r15d
-    mov edx, MENU_W - 12
-    mov ecx, MENU_ROW_H
-    mov r8d, C_SELECT
-    mov r9d, 6
-    call fill_rrect
-.item:
-    lea edi, [r12d + 6]
-    mov esi, r15d
-    mov edx, MENU_W - 12
-    mov ecx, MENU_ROW_H
-    mov r8d, A_MENU_ITEM
-    mov r9d, ebx
-    call add_hit
-    imul eax, ebx, MI_SIZE
-    lea rbp, [menu_items + rax]
-    mov rdi, rbp
-    lea esi, [r12d + 20]
-    lea edx, [r15d + 11]
-    call draw_item_icon
-    mov rdx, [rbp + MI_TEXT]
-    mov ecx, [rbp + MI_LEN]
-    lea edi, [r12d + 46]
-    lea esi, [r15d + 23]
-    mov r8d, INK(C_TEXT, ST_BODY)
-    call draw_text
-    cmp dword [rbp + MI_ICON], IC_PLUS
-    jne .check
-    mov edi, eax                            ; the name being created, quoted
-    lea esi, [r15d + 23]
-    mov rdx, [fields + F_MENU * FD_SIZE + FD_BUF]
-    mov ecx, [fields + F_MENU * FD_SIZE + FD_LEN]
-    mov r8d, INK(C_DIM, ST_BODY)
-    call draw_text
-.check:
-    cmp byte [rbp + MI_CHECK], 0
-    je .hint
-    mov edx, r12d
-    add edx, MENU_W - 40
-    lea ecx, [r15d + 6]
-    lea rdi, [menu_check]
-    mov esi, 3
-    mov r8d, C_TEXT
-    mov r9d, 6
-    call aa_polyline
-.hint:
-    movzx edx, byte [rbp + MI_HINT]
-    test edx, edx
-    jz .next
-    mov edi, r12d
-    add edi, MENU_W - 40
-    lea esi, [r15d + 9]
-    call draw_keycap
-.next:
-    add r15d, MENU_ROW_H
-    inc ebx
-    dec dword [rsp + 4]
-    jmp .row
-.done:
-    add rsp, 24
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbp
     pop rbx
     ret

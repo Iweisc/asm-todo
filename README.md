@@ -11,7 +11,7 @@ Needs `nasm`, `ld` and `make`.
 
 ```
 make          # builds build/todo-server and build/todo-client
-make test     # crypto test vectors
+make test     # crypto test vectors and UI checks
 make preview  # renders every text style and icon to build/preview.ppm
 make lint     # function length, file length and function comments
 make run      # starts the server with ./issues.db, opens a window, stops the server on close
@@ -91,6 +91,6 @@ Sync works like this:
 - `src/server/handlers.asm` has accounts and sessions. `teams.asm` has teams and members. `issues.asm` has snapshots, events and every change to issues, labels and projects. `messages.asm` has the team channel, direct messages and seen marks.
 - `src/client/net.asm` has the connection state machine, keepalive and reconnect.
 - `src/client/sync.asm` has the client's copy of the team, the pending changes, and the merged view.
-- `src/client/wayland.asm` has the window. `draw.asm`, `text.asm`, `font.asm` and `icons.asm` have the rasterizer, the anti-aliased stroke font and the icons.
-- `src/client/ui.asm` has the client's state and list logic, `input.asm` the mouse, keyboard and keymap, `widgets.asm` fields, buttons and menus, `views.asm` the screens, and `chat.asm` opening and drawing a conversation.
-- `tests/crypto_test.asm` checks the crypto against published test vectors. `tests/font_preview.asm` renders the font and icons for a look.
+- `src/client/wayland.asm` has the window. `draw.asm`, `text.asm`, `shapes.asm`, `font.asm` and `icons.asm` have the rasterizer, the anti-aliased stroke font, the anti-aliased shapes and the icons.
+- `src/client/ui.asm` has the client's state and list logic, `input.asm` the mouse, keyboard and keymap, `widgets.asm` fields, buttons and chips, `menu.asm` the command menu and the pickers, `views.asm` the screens, `sidebar.asm` the sidebar, and `chat.asm` opening and drawing a conversation.
+- `tests/crypto_test.asm` checks the crypto against published test vectors. `tests/ui_test.asm` draws the client into memory and checks how it answers clicks, keys and the wheel. `tests/font_preview.asm` renders the font and icons for a look.

@@ -1,10 +1,11 @@
-; Anti-aliased text and shapes.
+; Anti-aliased text.
 ;
 ; Glyphs from font.asm are flattened into line segments, and a pixel's
-; coverage is how much of it a round pen of the style's width covers along
-; them. Each glyph is rasterized once per style and per quarter-pixel offset,
-; on first use, then blended from the cache. Icons use the same distance
-; trick, through shape_fill and a coverage function.
+; coverage is how much of it a pen of the style's width covers along them.
+; Where strokes meet the pen is round, and a stroke end that touches nothing
+; is cut flat. Each glyph is rasterized once per style and per quarter-pixel
+; offset, on first use, then blended from the cache. shapes.asm uses the
+; same distance trick for circles, rounded boxes and icon strokes.
 ;
 ; Text color and style travel together as an "ink": color | style << 24.
 
@@ -24,14 +25,32 @@
 %define SEG_DX          8
 %define SEG_DY          12
 %define SEG_INV         16              ; 1 / squared length, 0 for a dot
-%define SEG_SIZE        20
+%define SEG_FLAGS       20
+%define SEG_NAX         24              ; the flat cut at the start: unit normal into the stroke,
+%define SEG_NAY         28
+%define SEG_OFFA        32              ; and how far past the start it is, plus half a pixel
+%define SEG_NBX         36              ; the same at the end
+%define SEG_NBY         40
+%define SEG_OFFB        44
+%define SEG_SIZE        48
+%define SF_FLAT_A       1               ; cut flat at the start instead of round
+%define SF_FLAT_B       2
+%define OPS_MAX         64
+%define GUIDE_SNAP      8               ; font units from a guideline that still count as on it
 %define FLATTEN_STEPS   12
 %define ARENA_SIZE      (4 * 1024 * 1024)
 
 section .rodata
 align 4
 style_size:     dd 12.0, 13.5, 13.5, 20.0, 26.0
-style_pen:      dd 100, 100, 135, 120, 125           ; pen width in font units
+style_pen:      dd 100, 100, 128, 118, 122           ; pen width in font units
+style_track:    dd 28, 18, 18, 6, 0                  ; extra space after each glyph, font units
+; Flat ends of steep strokes on these lines are cut level with them, like the
+; feet of an A, instead of square to the stroke. The cut sits half a pen past
+; the line, as far out as a round or joined stroke on it reaches.
+guidelines:     dd 0, XHEIGHT, CAPHEIGHT, ASCENDER, DESCENDER
+f_boost:        dd 0.35                             ; how much partly covered pixels darken
+f_snap:         dd 0.3
 f_half:         dd 0.5
 f_one:          dd 1.0
 f_255:          dd 255.0
@@ -47,6 +66,8 @@ ellipsis_char:  db GLYPH_ELLIPSIS
 section .bss
 alignb 4
 style_scale:    resd STYLE_COUNT                    ; px per font unit
+style_sy:       resd STYLE_COUNT                    ; and up, nudged so the x-height lands on a pixel edge
+style_yoff:     resd STYLE_COUNT                    ; how far below the cell's baseline row the font's baseline sits
 style_half:     resd STYLE_COUNT                    ; half the pen, px
 style_left:     resd STYLE_COUNT                    ; where x = 0 sits in a cell
 style_base:     resd STYLE_COUNT                    ; the baseline row in a cell
@@ -58,16 +79,15 @@ arena_used:     resq 1
 arena:          resb ARENA_SIZE
 
 tr_scale:       resd 1
+tr_sy:          resd 1
 tr_ox:          resd 1
 tr_oy:          resd 1
 cubic:          resd 8
 seg_count:      resd 1
 segs:           resb SEG_MAX * SEG_SIZE
-
-sh_cx:          resd 1                              ; shape parameters, px
-sh_cy:          resd 1
-sh_r:           resd 1
-sh_w:           resd 1                              ; half a stroke's width
+op_count:       resd 1
+op_first:       resd OPS_MAX + 1                    ; each stroke's first segment, then the end
+pen_reach:      resd 1                              ; half the pen plus half a pixel
 
 section .text
 
@@ -104,6 +124,7 @@ text_init:
     mulss xmm1, xmm0
     mulss xmm1, [f_half]
     movss [style_half + rbx * 4], xmm1
+    call snap_style
 
     ; left: room for strokes that reach 110 units left of the origin (j, the
     ; comma), base: room up to 790, cell bottom: down to -230.
@@ -126,13 +147,14 @@ text_init:
     add eax, 2
     mov [style_cell_w + rbx * 4], eax
 
-    ; Heavier pens get proportionally more room.
+    ; Heavier pens get proportionally more room, and small text more air.
     xor r12d, r12d
 .advance:
     mov rax, [glyph_table + r12 * 8]
     movsx eax, word [rax]
     add eax, [style_pen + rbx * 4]
     sub eax, BASE_PEN
+    add eax, [style_track + rbx * 4]
     shl eax, 2                              ; quarter pixels
     cvtsi2ss xmm0, eax
     mulss xmm0, [style_scale + rbx * 4]
@@ -148,6 +170,35 @@ text_init:
     jb .style
     pop r12
     pop rbx
+    ret
+
+; Hints a style a little: the bottom of the strokes on the baseline and the
+; top of the ones on the x-height land on pixel edges, so lowercase text
+; doesn't sit on a half-covered row. ebx = style
+snap_style:
+    movss xmm2, [style_half + rbx * 4]
+    movaps xmm0, xmm2
+    addss xmm0, [f_half]
+    call floor_f
+    cvtsi2ss xmm3, eax
+    subss xmm3, xmm2
+    movss [style_yoff + rbx * 4], xmm3      ; round(half pen) - half pen
+    ; The x-height with the pen on both sides, a bit under half rounding
+    ; down, so heavier styles keep the body's height.
+    mov eax, XHEIGHT
+    cvtsi2ss xmm0, eax
+    mulss xmm0, [style_scale + rbx * 4]
+    addss xmm0, xmm2
+    addss xmm0, xmm2
+    addss xmm0, [f_snap]
+    call floor_f
+    cvtsi2ss xmm0, eax
+    subss xmm0, xmm2
+    subss xmm0, xmm2
+    mov eax, XHEIGHT
+    cvtsi2ss xmm1, eax
+    divss xmm0, xmm1
+    movss [style_sy + rbx * 4], xmm0
     ret
 
 ; eax = font units, ebx = style -> eax = ceil(units * scale + half pen)
@@ -180,6 +231,7 @@ add_seg:
     divss xmm4, xmm2
 .dot:
     movss [rax + SEG_INV], xmm4
+    mov dword [rax + SEG_FLAGS], 0
     inc dword [seg_count]
 .full:
     ret
@@ -192,22 +244,32 @@ tr_point:
     addss xmm0, [tr_ox]
     movsx eax, word [rsi + 2]
     cvtsi2ss xmm2, eax
-    mulss xmm2, [tr_scale]
+    mulss xmm2, [tr_sy]
     movss xmm1, [tr_oy]
     subss xmm1, xmm2
     ret
 
-; rsi = a glyph's strokes. Replaces segs with them, placed by tr_*.
+; rsi = a glyph's strokes. Replaces segs with them, placed by tr_*, and
+; op_first with where each stroke starts.
 glyph_segs:
     push rbx
     push r12
     sub rsp, 24
     mov dword [seg_count], 0
+    mov dword [op_count], 0
     mov rbx, rsi
 .op:
     movzx eax, word [rbx]
     test eax, eax
     jz .done
+    mov ecx, [op_count]
+    cmp ecx, OPS_MAX
+    jae .no_room                            ; past this, the last stroke takes in the rest
+    mov edx, [seg_count]
+    mov [op_first + rcx * 4], edx
+    inc dword [op_count]
+.no_room:
+    movzx eax, word [rbx]
     cmp eax, GO_LINE
     jne .cubic
     lea rsi, [rbx + 2]
@@ -295,6 +357,9 @@ glyph_segs:
     add rbx, 18
     jmp .op
 .done:
+    mov eax, [op_count]
+    mov ecx, [seg_count]
+    mov [op_first + rax * 4], ecx
     add rsp, 24
     pop r12
     pop rbx
@@ -339,6 +404,283 @@ seg_dist2:
     movaps xmm0, xmm7
     ret
 
+; xmm0 = x, xmm1 = y, edi = first, esi = one past the last segment to skip
+; -> xmm0 = squared distance to the nearest segment outside that range
+seg_dist2_outside:
+    movss xmm7, [f_big]
+    lea rcx, [segs]
+    xor edx, edx
+    xorps xmm8, xmm8
+    movss xmm9, [f_one]
+.seg:
+    cmp edx, [seg_count]
+    jae .done
+    cmp edx, edi
+    jb .measure
+    cmp edx, esi
+    jb .next
+.measure:
+    movaps xmm2, xmm0
+    subss xmm2, [rcx + SEG_AX]
+    movaps xmm3, xmm1
+    subss xmm3, [rcx + SEG_AY]
+    movss xmm4, [rcx + SEG_DX]
+    mulss xmm4, xmm2
+    movss xmm5, [rcx + SEG_DY]
+    mulss xmm5, xmm3
+    addss xmm4, xmm5
+    mulss xmm4, [rcx + SEG_INV]
+    maxss xmm4, xmm8
+    minss xmm4, xmm9
+    movss xmm5, [rcx + SEG_DX]
+    mulss xmm5, xmm4
+    subss xmm2, xmm5
+    movss xmm6, [rcx + SEG_DY]
+    mulss xmm6, xmm4
+    subss xmm3, xmm6
+    mulss xmm2, xmm2
+    mulss xmm3, xmm3
+    addss xmm2, xmm3
+    minss xmm7, xmm2
+.next:
+    add rcx, SEG_SIZE
+    inc edx
+    jmp .seg
+.done:
+    movaps xmm0, xmm7
+    ret
+
+; Cuts every stroke end flat that doesn't run into another stroke. Dots
+; stay round. ebx = style
+mark_caps:
+    push r12
+    push r13
+    push r14
+    xor r12d, r12d
+.op:
+    cmp r12d, [op_count]
+    jae .done
+    mov r13d, [op_first + r12 * 4]
+    mov r14d, [op_first + r12 * 4 + 4]
+    cmp r13d, r14d
+    jae .next
+    ; A stroke shorter than the pen is a dot.
+    imul eax, r13d, SEG_SIZE
+    lea rax, [segs + rax]
+    imul ecx, r14d, SEG_SIZE
+    lea rcx, [segs + rcx - SEG_SIZE]
+    movss xmm0, [rcx + SEG_AX]
+    addss xmm0, [rcx + SEG_DX]
+    subss xmm0, [rax + SEG_AX]
+    movss xmm1, [rcx + SEG_AY]
+    addss xmm1, [rcx + SEG_DY]
+    subss xmm1, [rax + SEG_AY]
+    mulss xmm0, xmm0
+    mulss xmm1, xmm1
+    addss xmm0, xmm1
+    sqrtss xmm0, xmm0
+    movss xmm1, [style_half + rbx * 4]
+    addss xmm1, xmm1
+    ucomiss xmm0, xmm1
+    jb .next
+    mov edi, r13d
+    xor esi, esi
+    call cap_end
+    lea edi, [r14d - 1]
+    mov esi, 1
+    call cap_end
+.next:
+    inc r12d
+    jmp .op
+.done:
+    pop r14
+    pop r13
+    pop r12
+    ret
+
+; One end of a stroke. edi = its segment, esi = 0 for the start or 1 for
+; the end, ebx = style, r13d and r14d = the stroke's segments, as in mark_caps
+cap_end:
+    push rbp
+    push r12
+    sub rsp, 24
+    imul eax, edi, SEG_SIZE
+    lea rbp, [segs + rax]
+    mov r12d, esi
+    movss xmm0, [rbp + SEG_AX]              ; the end point
+    movss xmm1, [rbp + SEG_AY]
+    movss xmm2, [rbp + SEG_DX]              ; and the way into the stroke
+    movss xmm3, [rbp + SEG_DY]
+    test r12d, r12d
+    jz .point
+    addss xmm0, xmm2
+    addss xmm1, xmm3
+    xorps xmm4, xmm4
+    subss xmm4, xmm2
+    movaps xmm2, xmm4
+    xorps xmm4, xmm4
+    subss xmm4, xmm3
+    movaps xmm3, xmm4
+.point:
+    movss [rsp], xmm0
+    movss [rsp + 4], xmm1
+    movss [rsp + 8], xmm2
+    movss [rsp + 12], xmm3
+    mov edi, r13d
+    mov esi, r14d
+    call seg_dist2_outside
+    sqrtss xmm0, xmm0
+    ucomiss xmm0, [style_half + rbx * 4]
+    jbe .done                               ; it joins another stroke
+
+    movss xmm2, [rsp + 8]
+    movss xmm3, [rsp + 12]
+    movaps xmm4, xmm2
+    mulss xmm4, xmm4
+    movaps xmm5, xmm3
+    mulss xmm5, xmm5
+    addss xmm4, xmm5
+    sqrtss xmm4, xmm4
+    ucomiss xmm4, [f_eps]
+    jbe .done
+    divss xmm2, xmm4
+    divss xmm3, xmm4
+    movss xmm6, [f_half]                    ; the cut's offset
+    ; Steep strokes ending on a guideline get cut level with it.
+    movaps xmm4, xmm2
+    andps xmm4, [abs_mask]
+    movaps xmm5, xmm3
+    andps xmm5, [abs_mask]
+    ucomiss xmm5, xmm4
+    jbe .store
+    movss xmm0, [tr_oy]
+    subss xmm0, [rsp + 4]
+    divss xmm0, [tr_sy]                     ; the end's height in font units
+    xor ecx, ecx
+.guide:
+    cvtsi2ss xmm1, dword [guidelines + rcx * 4]
+    subss xmm1, xmm0
+    andps xmm1, [abs_mask]
+    mov eax, GUIDE_SNAP
+    cvtsi2ss xmm4, eax
+    ucomiss xmm1, xmm4
+    jb .level
+    inc ecx
+    cmp ecx, 5
+    jb .guide
+    jmp .store
+.level:
+    addss xmm6, [style_half + rbx * 4]
+    xorps xmm2, xmm2
+    movss xmm4, [f_one]
+    xorps xmm5, xmm5
+    ucomiss xmm3, xmm5
+    jae .down
+    subss xmm5, xmm4
+    movaps xmm4, xmm5
+.down:
+    movaps xmm3, xmm4
+.store:
+    mov eax, SF_FLAT_A
+    lea rcx, [rbp + SEG_NAX]
+    test r12d, r12d
+    jz .flag
+    mov eax, SF_FLAT_B
+    lea rcx, [rbp + SEG_NBX]
+.flag:
+    or [rbp + SEG_FLAGS], eax
+    movss [rcx], xmm2
+    movss [rcx + 4], xmm3
+    movss [rcx + 8], xmm6
+.done:
+    add rsp, 24
+    pop r12
+    pop rbp
+    ret
+
+; xmm0 = x, xmm1 = y -> xmm0 = how much of the pixel there the glyph's
+; strokes cover, 0-1. A flat end lets its segment run on past the end point
+; and cuts it there instead, so a level cut on a slanted stroke stays square.
+glyph_cov:
+    xorps xmm15, xmm15                      ; the best so far
+    xorps xmm8, xmm8
+    movss xmm9, [f_one]
+    lea rcx, [segs]
+    mov edx, [seg_count]
+.seg:
+    test edx, edx
+    jz .done
+    movaps xmm2, xmm0
+    subss xmm2, [rcx + SEG_AX]
+    movaps xmm3, xmm1
+    subss xmm3, [rcx + SEG_AY]
+    movss xmm4, [rcx + SEG_DX]
+    mulss xmm4, xmm2
+    movss xmm5, [rcx + SEG_DY]
+    mulss xmm5, xmm3
+    addss xmm4, xmm5
+    mulss xmm4, [rcx + SEG_INV]             ; t along the segment
+    mov eax, [rcx + SEG_FLAGS]
+    test eax, SF_FLAT_A
+    jnz .no_low
+    maxss xmm4, xmm8
+.no_low:
+    test eax, SF_FLAT_B
+    jnz .no_high
+    minss xmm4, xmm9
+.no_high:
+    movss xmm5, [rcx + SEG_DX]
+    mulss xmm5, xmm4
+    movaps xmm6, xmm2
+    subss xmm6, xmm5
+    movss xmm5, [rcx + SEG_DY]
+    mulss xmm5, xmm4
+    movaps xmm7, xmm3
+    subss xmm7, xmm5
+    mulss xmm6, xmm6
+    mulss xmm7, xmm7
+    addss xmm6, xmm7
+    sqrtss xmm6, xmm6
+    movss xmm5, [pen_reach]
+    subss xmm5, xmm6
+    ucomiss xmm5, xmm15
+    jbe .next
+    minss xmm5, xmm9
+    test eax, SF_FLAT_A
+    jz .end_cut
+    movss xmm6, [rcx + SEG_NAX]
+    mulss xmm6, xmm2
+    movss xmm7, [rcx + SEG_NAY]
+    mulss xmm7, xmm3
+    addss xmm6, xmm7
+    addss xmm6, [rcx + SEG_OFFA]
+    maxss xmm6, xmm8
+    minss xmm6, xmm9
+    mulss xmm5, xmm6
+.end_cut:
+    test eax, SF_FLAT_B
+    jz .keep
+    movaps xmm6, xmm2
+    subss xmm6, [rcx + SEG_DX]
+    mulss xmm6, [rcx + SEG_NBX]
+    movaps xmm7, xmm3
+    subss xmm7, [rcx + SEG_DY]
+    mulss xmm7, [rcx + SEG_NBY]
+    addss xmm6, xmm7
+    addss xmm6, [rcx + SEG_OFFB]
+    maxss xmm6, xmm8
+    minss xmm6, xmm9
+    mulss xmm5, xmm6
+.keep:
+    maxss xmm15, xmm5
+.next:
+    add rcx, SEG_SIZE
+    dec edx
+    jmp .seg
+.done:
+    movaps xmm0, xmm15
+    ret
+
 ; xmm0 = coverage 0-1 (any value) -> eax = 0-255
 cov_byte:
     xorps xmm1, xmm1
@@ -361,6 +703,8 @@ glyph_cell:
 .done:
     ret
 
+; Rasterizes a glyph into a new cache cell, for glyph_cell.
+; edi = style, esi = glyph, edx = phase -> rax = the cell, or 0 if the cache is full
 raster_cell:
     push rbx
     push rbp
@@ -383,17 +727,24 @@ raster_cell:
 
     movss xmm0, [style_scale + rbx * 4]
     movss [tr_scale], xmm0
+    movss xmm0, [style_sy + rbx * 4]
+    movss [tr_sy], xmm0
     cvtsi2ss xmm0, dword [rsp + 4]
     mulss xmm0, [f_quarter]
     cvtsi2ss xmm1, dword [style_left + rbx * 4]
     addss xmm0, xmm1
     movss [tr_ox], xmm0
     cvtsi2ss xmm0, dword [style_base + rbx * 4]
+    addss xmm0, [style_yoff + rbx * 4]
     movss [tr_oy], xmm0
     mov eax, [rsp]
     mov rsi, [glyph_table + rax * 8]
     add rsi, 2                              ; past the advance
     call glyph_segs
+    call mark_caps
+    movss xmm0, [style_half + rbx * 4]
+    addss xmm0, [f_half]
+    movss [pen_reach], xmm0
 
     mov r12d, [style_cell_w + rbx * 4]
     xor r13d, r13d                          ; row
@@ -408,12 +759,14 @@ raster_cell:
     addss xmm0, [f_half]
     cvtsi2ss xmm1, r13d
     addss xmm1, [f_half]
-    call seg_dist2
-    sqrtss xmm0, xmm0
-    movss xmm1, [style_half + rbx * 4]
-    addss xmm1, [f_half]
+    call glyph_cov
+    ; Thin light strokes on a dark background read too faint when blended
+    ; linearly, so partly covered pixels get pushed up a little.
+    movss xmm1, [f_one]
     subss xmm1, xmm0
-    movaps xmm0, xmm1
+    mulss xmm1, xmm0
+    mulss xmm1, [f_boost]
+    addss xmm0, xmm1
     call cov_byte
     mov ecx, r13d
     imul ecx, r12d
@@ -687,463 +1040,6 @@ draw_text_fit:
     pop r13
     pop r12
     pop rbp
-    pop rbx
-    ret
-
-; --- shapes ---
-
-; Blends a shape whose coverage a function computes.
-; edi = x0, esi = y0, edx = x1, ecx = y1 (exclusive), r8d = color,
-; r9 = coverage function: xmm0 = x, xmm1 = y -> xmm0 = coverage
-shape_fill:
-    push rbx
-    push rbp
-    push r12
-    push r13
-    push r14
-    push r15
-    sub rsp, 24
-    cmp edi, [clip_x0]
-    cmovl edi, [clip_x0]
-    cmp esi, [clip_y0]
-    cmovl esi, [clip_y0]
-    cmp edx, [clip_x1]
-    cmovg edx, [clip_x1]
-    cmp ecx, [clip_y1]
-    cmovg ecx, [clip_y1]
-    mov r12d, edi
-    mov r13d, esi
-    mov r14d, edx
-    mov r15d, ecx
-    mov [rsp], r8d
-    mov rbx, r9
-.row:
-    cmp r13d, r15d
-    jge .done
-    mov ebp, r12d
-.col:
-    cmp ebp, r14d
-    jge .next_row
-    cvtsi2ss xmm0, ebp
-    addss xmm0, [f_half]
-    cvtsi2ss xmm1, r13d
-    addss xmm1, [f_half]
-    call rbx
-    call cov_byte
-    test eax, eax
-    jz .skip
-    mov edx, eax
-    mov eax, r13d
-    imul eax, [fb_w]
-    add eax, ebp
-    mov rdi, [fb]
-    lea rdi, [rdi + rax * 4]
-    mov esi, [rsp]
-    call blend_pixel
-.skip:
-    inc ebp
-    jmp .col
-.next_row:
-    inc r13d
-    jmp .row
-.done:
-    add rsp, 24
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbp
-    pop rbx
-    ret
-
-; xmm0 = x, xmm1 = y -> xmm0 = distance from (sh_cx, sh_cy)
-center_dist:
-    subss xmm0, [sh_cx]
-    subss xmm1, [sh_cy]
-    mulss xmm0, xmm0
-    mulss xmm1, xmm1
-    addss xmm0, xmm1
-    sqrtss xmm0, xmm0
-    ret
-
-cov_disc:
-    call center_dist
-    movss xmm1, [sh_r]
-    addss xmm1, [f_half]
-    subss xmm1, xmm0
-    movaps xmm0, xmm1
-    ret
-
-cov_ring:
-    call center_dist
-    subss xmm0, [sh_r]
-    movss xmm1, xmm0                        ; |d - r|
-    xorps xmm2, xmm2
-    subss xmm2, xmm0
-    maxss xmm1, xmm2
-    movss xmm0, [sh_w]
-    addss xmm0, [f_half]
-    subss xmm0, xmm1
-    ret
-
-; The ring cut into 8 dashes: 16 sectors of 22.5 degrees, every other one drawn.
-cov_dashed_ring:
-    movss xmm2, xmm0
-    subss xmm2, [sh_cx]                     ; dx
-    movss xmm3, xmm1
-    subss xmm3, [sh_cy]                     ; dy
-    xorps xmm4, xmm4
-    xor ecx, ecx
-    ucomiss xmm2, xmm4
-    jae .x_positive
-    xor ecx, 1
-.x_positive:
-    ucomiss xmm3, xmm4
-    jae .y_positive
-    xor ecx, 1                              ; mirrored quadrants count the other way
-.y_positive:
-    movaps xmm5, xmm2
-    andps xmm5, [abs_mask]
-    movaps xmm6, xmm3
-    andps xmm6, [abs_mask]
-    xor edx, edx                            ; sector within the quadrant, 0-3
-    ucomiss xmm5, xmm6
-    jb .steep
-    mulss xmm5, [f_tan22]
-    ucomiss xmm6, xmm5
-    jbe .sector
-    mov edx, 1
-    jmp .sector
-.steep:
-    mov edx, 3
-    mulss xmm6, [f_tan22]
-    ucomiss xmm5, xmm6
-    jbe .sector
-    mov edx, 2
-.sector:
-    test ecx, ecx
-    jz .parity
-    xor edx, 3
-.parity:
-    test edx, 1
-    jnz cov_ring
-    xorps xmm0, xmm0
-    ret
-
-; A disc's right half.
-cov_half_disc:
-    movaps xmm3, xmm0                       ; cov_disc leaves xmm3 alone
-    call cov_disc
-    movaps xmm1, xmm3
-    subss xmm1, [sh_cx]
-    addss xmm1, [f_half]
-    xorps xmm2, xmm2
-    maxss xmm1, xmm2
-    minss xmm1, [f_one]
-    mulss xmm0, xmm1
-    ret
-
-cov_strokes:
-    call seg_dist2
-    sqrtss xmm0, xmm0
-    movss xmm1, [sh_w]
-    addss xmm1, [f_half]
-    subss xmm1, xmm0
-    movaps xmm0, xmm1
-    ret
-
-; Sets sh_cx, sh_cy, sh_r from quarter pixels and returns the bounding box.
-; edi = cx, esi = cy, edx = r, ecx = extra margin -> edi, esi, edx, ecx = x0, y0, x1, y1
-circle_setup:
-    cvtsi2ss xmm0, edi
-    mulss xmm0, [f_quarter]
-    movss [sh_cx], xmm0
-    cvtsi2ss xmm0, esi
-    mulss xmm0, [f_quarter]
-    movss [sh_cy], xmm0
-    cvtsi2ss xmm0, edx
-    mulss xmm0, [f_quarter]
-    movss [sh_r], xmm0
-    lea eax, [edx + ecx + 8]                ; reach in quarter pixels, plus 2px
-    mov r10d, edi
-    sub r10d, eax
-    sar r10d, 2
-    lea r11d, [edi + eax]
-    sar r11d, 2
-    mov edi, esi
-    sub edi, eax
-    sar edi, 2
-    lea ecx, [esi + eax]
-    sar ecx, 2
-    mov esi, edi
-    mov edi, r10d
-    mov edx, r11d
-    ret
-
-; edi = cx, esi = cy, edx = r (quarter pixels), ecx = color
-aa_disc:
-    mov r8d, ecx
-    xor ecx, ecx
-    call circle_setup
-    lea r9, [cov_disc]
-    jmp shape_fill
-
-; edi = cx, esi = cy, edx = r, ecx = color, r8d = stroke width (quarter pixels)
-aa_ring:
-    lea r9, [cov_ring]
-ring_common:
-    cvtsi2ss xmm0, r8d
-    mulss xmm0, [f_quarter]
-    mulss xmm0, [f_half]
-    movss [sh_w], xmm0
-    push r9
-    push rcx
-    mov ecx, r8d
-    call circle_setup
-    pop r8
-    pop r9
-    jmp shape_fill
-
-aa_dashed_ring:
-    lea r9, [cov_dashed_ring]
-    jmp ring_common
-
-; edi = cx, esi = cy, edx = r, ecx = color. The right half of a disc.
-aa_half_disc:
-    mov r8d, ecx
-    xor ecx, ecx
-    call circle_setup
-    lea r9, [cov_half_disc]
-    jmp shape_fill
-
-; A round-capped polyline.
-; rdi = points as dword pairs in quarter pixels, esi = point count,
-; edx = x, ecx = y (origin, pixels), r8d = color, r9d = pen width (quarter pixels)
-aa_polyline:
-    push rbx
-    push r12
-    push r13
-    push r14
-    push r15
-    sub rsp, 32
-    mov rbx, rdi
-    mov r12d, esi
-    mov [rsp], r8d
-    cvtsi2ss xmm0, r9d
-    mulss xmm0, [f_quarter]
-    mulss xmm0, [f_half]
-    movss [sh_w], xmm0
-    cvtsi2ss xmm0, edx
-    movss [tr_ox], xmm0
-    cvtsi2ss xmm0, ecx
-    movss [tr_oy], xmm0
-    mov dword [seg_count], 0
-    mov r13d, 0x7fffffff                    ; bounding box, quarter pixels
-    mov r14d, -0x7fffffff
-    mov r15d, 0x7fffffff
-    mov dword [rsp + 4], -0x7fffffff
-    xor ecx, ecx
-.point:
-    cmp ecx, r12d
-    jae .segments
-    mov eax, [rbx + rcx * 8]
-    cmp eax, r13d
-    cmovl r13d, eax
-    cmp eax, r14d
-    cmovg r14d, eax
-    mov eax, [rbx + rcx * 8 + 4]
-    cmp eax, r15d
-    cmovl r15d, eax
-    cmp eax, [rsp + 4]
-    jle .next_point
-    mov [rsp + 4], eax
-.next_point:
-    inc ecx
-    jmp .point
-.segments:
-    mov ecx, 1
-.seg:
-    cmp ecx, r12d
-    jae .fill
-    mov [rsp + 8], ecx
-    cvtsi2ss xmm0, dword [rbx + rcx * 8 - 8]
-    mulss xmm0, [f_quarter]
-    addss xmm0, [tr_ox]
-    cvtsi2ss xmm1, dword [rbx + rcx * 8 - 4]
-    mulss xmm1, [f_quarter]
-    addss xmm1, [tr_oy]
-    cvtsi2ss xmm2, dword [rbx + rcx * 8]
-    mulss xmm2, [f_quarter]
-    addss xmm2, [tr_ox]
-    cvtsi2ss xmm3, dword [rbx + rcx * 8 + 4]
-    mulss xmm3, [f_quarter]
-    addss xmm3, [tr_oy]
-    call add_seg
-    mov ecx, [rsp + 8]
-    inc ecx
-    jmp .seg
-.fill:
-    cvttss2si eax, [tr_ox]
-    cvttss2si ecx, [tr_oy]
-    sar r13d, 2
-    sar r14d, 2
-    sar r15d, 2
-    mov edx, [rsp + 4]
-    sar edx, 2
-    lea edi, [eax + r13d - 3]
-    lea esi, [ecx + r15d - 3]
-    lea r9d, [ecx + edx + 4]
-    lea edx, [eax + r14d + 4]
-    mov ecx, r9d
-    mov r8d, [rsp]
-    lea r9, [cov_strokes]
-    call shape_fill
-    add rsp, 32
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    ret
-
-; A rectangle with anti-aliased round corners.
-; edi = x, esi = y, edx = w, ecx = h, r8d = color, r9d = corner radius
-fill_rrect:
-    push rbx
-    push rbp
-    push r12
-    push r13
-    push r14
-    push r15
-    sub rsp, 8
-    mov r12d, edi
-    mov r13d, esi
-    mov r14d, edx
-    mov r15d, ecx
-    mov ebx, r8d
-    mov ebp, r9d
-    lea eax, [ebp * 2]                      ; the radius can't exceed half a side
-    cmp eax, r14d
-    jle .w_ok
-    mov ebp, r14d
-    shr ebp, 1
-.w_ok:
-    lea eax, [ebp * 2]
-    cmp eax, r15d
-    jle .h_ok
-    mov ebp, r15d
-    shr ebp, 1
-.h_ok:
-    mov edi, r12d                           ; middle band, full width
-    lea esi, [r13d + ebp]
-    mov edx, r14d
-    mov ecx, r15d
-    sub ecx, ebp
-    sub ecx, ebp
-    mov r8d, ebx
-    call fill_rect
-    lea edi, [r12d + ebp]                   ; top and bottom bands between the corners
-    mov esi, r13d
-    mov edx, r14d
-    sub edx, ebp
-    sub edx, ebp
-    mov ecx, ebp
-    mov r8d, ebx
-    call fill_rect
-    lea edi, [r12d + ebp]
-    lea esi, [r13d + r15d]
-    sub esi, ebp
-    mov edx, r14d
-    sub edx, ebp
-    sub edx, ebp
-    mov ecx, ebp
-    mov r8d, ebx
-    call fill_rect
-    test ebp, ebp
-    jz .done
-    cvtsi2ss xmm0, ebp
-    movss [sh_r], xmm0
-    ; four corners: (box x, box y, circle center x, center y)
-    mov edi, r12d
-    mov esi, r13d
-    lea eax, [r12d + ebp]
-    lea ecx, [r13d + ebp]
-    call .corner
-    lea edi, [r12d + r14d]
-    sub edi, ebp
-    mov esi, r13d
-    mov eax, edi
-    lea ecx, [r13d + ebp]
-    call .corner
-    mov edi, r12d
-    lea esi, [r13d + r15d]
-    sub esi, ebp
-    lea eax, [r12d + ebp]
-    mov ecx, esi
-    call .corner
-    lea edi, [r12d + r14d]
-    sub edi, ebp
-    lea esi, [r13d + r15d]
-    sub esi, ebp
-    mov eax, edi
-    mov ecx, esi
-    call .corner
-.done:
-    add rsp, 8
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbp
-    pop rbx
-    ret
-; edi, esi = corner box, eax, ecx = circle center (pixel corners)
-.corner:
-    cvtsi2ss xmm0, eax
-    movss [sh_cx], xmm0
-    cvtsi2ss xmm0, ecx
-    movss [sh_cy], xmm0
-    lea edx, [edi + ebp]
-    lea ecx, [esi + ebp]
-    mov r8d, ebx
-    lea r9, [cov_disc]
-    jmp shape_fill
-
-; A rounded rectangle outline, 1px. Drawn as the border color with the
-; inside filled again, so it needs to sit on an opaque fill.
-; edi = x, esi = y, edx = w, ecx = h, r8d = border, r9d = fill, r10d = corner radius
-outline_rrect:
-    push rbx
-    push r12
-    push r13
-    push r14
-    push r15
-    push rbp
-    sub rsp, 8
-    mov r12d, edi
-    mov r13d, esi
-    mov r14d, edx
-    mov r15d, ecx
-    mov ebx, r9d
-    mov ebp, r10d
-    mov r9d, ebp
-    call fill_rrect
-    lea edi, [r12d + 1]
-    lea esi, [r13d + 1]
-    lea edx, [r14d - 2]
-    lea ecx, [r15d - 2]
-    mov r8d, ebx
-    lea r9d, [ebp - 1]
-    xor eax, eax
-    cmp r9d, eax
-    cmovl r9d, eax
-    call fill_rrect
-    add rsp, 8
-    pop rbp
-    pop r15
-    pop r14
-    pop r13
-    pop r12
     pop rbx
     ret
 

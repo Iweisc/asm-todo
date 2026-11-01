@@ -8,11 +8,13 @@ text s_dm_intro,        "This is the start of your conversation with "
 section .bss
 alignb 4
 chat_scroll:    resd 1                  ; how far up from the newest message
+draft_peer:     resd 1                  ; whose conversation the message box's text was written in
 chat_heights:   resd VIEW_CHAT          ; each message's height, measured before drawing
 
 section .text
 
-; Opens a conversation, ready to type. edi = peer, 0 for the team's channel
+; Opens a conversation, ready to type, with what was typed in it last time
+; if it's the same one. edi = peer, 0 for the team's channel
 open_chat:
     push rbx
     mov ebx, edi
@@ -25,8 +27,12 @@ open_chat:
 .open:
     call close_detail
     mov dword [chat_scroll], 0
+    cmp [draft_peer], ebx
+    je .keep_draft
+    mov [draft_peer], ebx
     mov edi, F_MESSAGE
     call field_clear
+.keep_draft:
     mov edi, ebx
     call sync_open_chat
 .focus:
@@ -38,6 +44,7 @@ open_chat:
 
 ; The member list changed. A conversation with someone who left closes.
 ui_members_changed:
+    call clear_joined_invite
     cmp byte [chat_open], 0
     je .done
     mov edi, [chat_peer]
@@ -47,6 +54,47 @@ ui_members_changed:
     test rax, rax
     jz close_detail
 .done:
+    ret
+
+; Empties the invite box once the name typed in it is a member.
+clear_joined_invite:
+    push rbx
+    push r12
+    push r13
+    push r14
+    sub rsp, 8
+    mov edi, F_MEMBER
+    call field_trimmed
+    test edx, edx
+    jz .done
+    mov r12, rsi
+    mov r13d, edx
+    lea rbx, [members]
+    imul eax, [member_count], CM_SIZE
+    lea r14, [rbx + rax]
+.member:
+    cmp rbx, r14
+    jae .done
+    movzx edx, byte [rbx + CM_NAME_LEN]
+    cmp edx, r13d
+    jne .next
+    lea rdi, [rbx + CM_NAME]
+    mov rsi, r12
+    call mem_eq
+    test eax, eax
+    jz .next
+    mov edi, F_MEMBER
+    call field_clear
+    jmp .done
+.next:
+    add rbx, CM_SIZE
+    jmp .member
+.done:
+    add rsp, 8
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
     ret
 
 %define CHAT_AVATAR     32

@@ -36,6 +36,7 @@ global _start
 %include "font.asm"
 %include "draw.asm"
 %include "text.asm"
+%include "shapes.asm"
 %include "icons.asm"
 %include "wayland.asm"
 %include "net.asm"
@@ -43,7 +44,9 @@ global _start
 %include "ui.asm"
 %include "input.asm"
 %include "widgets.asm"
+%include "menu.asm"
 %include "views.asm"
+%include "sidebar.asm"
 %include "chat.asm"
 
 section .text
@@ -119,6 +122,9 @@ main_loop:
     call net_timeout
     cmp eax, ebx
     cmovb ebx, eax
+    call status_timeout
+    cmp eax, ebx
+    cmovb ebx, eax
     cmp byte [net_state], NET_OFF
     jne .poll
     mov eax, 1000
@@ -150,4 +156,5 @@ main_loop:
 .tick:
     call repeat_tick
     call net_tick
+    call status_tick
     jmp .loop
