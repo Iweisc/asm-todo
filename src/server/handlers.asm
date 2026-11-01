@@ -1,5 +1,5 @@
 ; Application messages: the dispatcher, accounts and sessions. Teams are in
-; teams.asm, issues and the sync in issues.asm.
+; teams.asm, issues and the sync in issues.asm, chat in messages.asm.
 
 %define JOB_LOGIN           1
 %define JOB_REGISTER        2
@@ -74,6 +74,8 @@ handle_message:
     je .subscribe
     cmp eax, MSG_OPEN_ISSUE
     je .open_issue
+    cmp eax, MSG_OPEN_CHAT
+    je .open_chat
     cmp eax, MSG_OP
     je .op
 .violation:
@@ -114,6 +116,9 @@ handle_message:
     jmp .done
 .open_issue:
     call h_open_issue
+    jmp .done
+.open_chat:
+    call h_open_chat
     jmp .done
 .op:
     call h_op
@@ -649,7 +654,7 @@ finish_job:
     call auth_failed
 .cleanup:
     lea rdi, [r12 + C_JOB_NAME_LEN]         ; name, salt and hash state, all of it
-    mov esi, CONN_SIZE - C_JOB_NAME_LEN
+    mov esi, C_JOB + PB_SIZE - C_JOB_NAME_LEN
     call wipe
     mov edi, ebx                            ; input that arrived while hashing
     call conn_process

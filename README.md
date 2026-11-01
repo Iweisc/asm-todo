@@ -2,7 +2,7 @@
 
 An issue tracker for teams in the style of Linear, written entirely in x86-64 assembly for Linux. No libc, no libraries, only raw syscalls. Every layer is hand-written: the WebSocket server, the Noise encryption and the crypto under it, the journaled database, the sync engine, the Wayland client, the rasterizer and the anti-aliased font.
 
-- `todo-server` holds accounts, teams and their issues, and pushes every change to everyone viewing the same team.
+- `todo-server` holds accounts, teams, their issues and their messages, and pushes every change to everyone viewing the same team.
 - `todo-client` is a native Wayland window. It speaks the Wayland wire protocol over the compositor socket, draws every pixel into shared memory, and keeps one encrypted connection to the server.
 
 ## Build and run
@@ -38,6 +38,8 @@ Drag a card on the board to another column to change its status. Esc while dragg
 
 Clicking an issue opens it. Click its title or description to edit them, and use the properties on the right to change the rest. Comments show up live for everyone viewing the issue.
 
+Each team has a `#general` channel, and clicking a member in the sidebar opens a direct conversation with them. Messages arrive live, and a dot marks conversations with messages you haven't seen yet, even after a restart. Opening a conversation loads its newest 100 messages. Messages can be up to 500 characters, and each server keeps the newest 32,768 across all teams.
+
 Keys, when no text field has focus:
 
 | Key | Does |
@@ -48,11 +50,11 @@ Keys, when no text field has focus:
 | `Enter` | open the selected issue |
 | `S` `P` `A` `L` `M` | status, priority, assignee, labels, project |
 | `Ctrl+B` | switch between list and board |
-| `Esc` | close the issue, menu or dialog |
+| `Esc` | close the issue, conversation, menu or dialog |
 
-In menus, typing filters and Enter picks. In the label and project menus, typing a new name offers to create it. In the new issue dialog, Tab moves between title and description and Ctrl+Enter creates the issue. In comments, Enter sends and Shift+Enter adds a line. The keyboard layout is US QWERTY.
+In menus, typing filters and Enter picks. In the label and project menus, typing a new name offers to create it. In the new issue dialog, Tab moves between title and description and Ctrl+Enter creates the issue. In comments and messages, Enter sends and Shift+Enter adds a line. In an open conversation, typing anywhere goes to the message box. The keyboard layout is US QWERTY.
 
-Changes made while the server is unreachable show up right away and are sent once the client reconnects.
+Changes and messages made while the server is unreachable show up right away and are sent once the client reconnects.
 
 ## Security
 
@@ -60,7 +62,7 @@ Changes made while the server is unreachable show up right away and are sent onc
 - Passwords: PBKDF2-HMAC-SHA256 with 600,000 iterations and a random 16-byte salt per user. Hashing runs in slices between events, so logins never stall the server. Logins with an unknown username are hashed against a dummy salt, so response time doesn't reveal which usernames exist.
 - Sessions: 256-bit random tokens, stored only as SHA-256 hashes, valid for 30 days, compared in constant time. Logging out revokes the session on every connection using it.
 - Limits: 10 password checks per IP per minute, 5 failed attempts per connection, 16 connections per IP, 30 seconds to log in, 90 seconds idle. Clients that don't read their messages get disconnected instead of buffered without bound.
-- Authorization: every operation checks team membership on the server, and every field is validated there. Only owners can add or remove members. Removed members stop receiving updates immediately and are unassigned from the team's issues.
+- Authorization: every operation checks team membership on the server, and every field is validated there. Only owners can add or remove members. Removed members stop receiving updates and messages immediately and are unassigned from the team's issues. Direct messages only reach the two people in them.
 - Storage: the database and its journal are created with mode 0600. The database holds the server's private key.
 
 ## Storage
@@ -75,6 +77,7 @@ Sync works like this:
 
 - Each team has a sequence number that goes up with every change. `SUBSCRIBE` returns the team's labels and projects, then a snapshot of its issues at the current sequence. Every change after that arrives as an `EVENT` with the next number. A client that sees a gap asks for a fresh snapshot.
 - Descriptions and comments aren't in the snapshot. `OPEN_ISSUE` fetches them for one issue, and events keep the open issue current.
+- Messages are sent as changes too, but they aren't events and don't move the sequence number. `SUBSCRIBE` also returns `UNREAD`, the conversations with messages the user hasn't seen. `OPEN_CHAT` fetches a conversation's newest messages and marks them seen, and `CHAT` delivers each new message to the connections allowed to read it.
 - Clients number their changes 1, 2, 3 per session. The server applies them in order and remembers the last one per session, so a change resent after a dropped connection is acknowledged without being applied twice.
 - The client keeps the server's state and its own unacknowledged changes apart, and shows the two merged. That's how offline edits appear immediately and how a rejected change disappears cleanly.
 
@@ -85,9 +88,9 @@ Sync works like this:
 - `src/common/ws.asm` and `src/common/wire.asm` have WebSocket framing and the message reader and writers.
 - `src/server/db.asm` has the tables, the journal and snapshots.
 - `src/server/conn.asm` has the event loop's connections: HTTP upgrade, handshake, framing and buffered writes.
-- `src/server/handlers.asm` has accounts and sessions. `teams.asm` has teams and members. `issues.asm` has snapshots, events and every change to issues, labels and projects.
+- `src/server/handlers.asm` has accounts and sessions. `teams.asm` has teams and members. `issues.asm` has snapshots, events and every change to issues, labels and projects. `messages.asm` has the team channel, direct messages and seen marks.
 - `src/client/net.asm` has the connection state machine, keepalive and reconnect.
 - `src/client/sync.asm` has the client's copy of the team, the pending changes, and the merged view.
 - `src/client/wayland.asm` has the window. `draw.asm`, `text.asm`, `font.asm` and `icons.asm` have the rasterizer, the anti-aliased stroke font and the icons.
-- `src/client/ui.asm` has the client's state and list logic, `input.asm` the mouse and keyboard, `widgets.asm` fields, buttons and menus, and `views.asm` the screens.
+- `src/client/ui.asm` has the client's state and list logic, `input.asm` the mouse, keyboard and keymap, `widgets.asm` fields, buttons and menus, `views.asm` the screens, and `chat.asm` opening and drawing a conversation.
 - `tests/crypto_test.asm` checks the crypto against published test vectors. `tests/font_preview.asm` renders the font and icons for a look.

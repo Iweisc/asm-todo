@@ -571,6 +571,9 @@ h_remove_member:
     mov rsi, rax
     call free_row
     mov edi, r12d
+    mov esi, r13d
+    call forget_seen
+    mov edi, r12d
     call find_team
     mov r15, rax
     mov ebp, [r15 + TEAM_SEQ]               ; the seq before the first event

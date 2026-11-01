@@ -10,6 +10,11 @@
 ;
 ; One issue at a time can be open in the detail view. Its description and
 ; comments are fetched with OPEN_ISSUE and kept current by events.
+;
+; Chat sits beside all that. One conversation at a time can be open: the
+; team's channel or a direct message with a member, fetched with OPEN_CHAT
+; and kept current by CHAT messages. Messages we send are ops too, so they
+; queue while offline and show dimmed until the server has them.
 
 %define CO_ID           0
 %define CO_ROLE         4
@@ -57,6 +62,16 @@
 %define CC_TEXT         16              ; COMMENT_MAX bytes
 %define CC_SIZE         520
 
+; A message in the open conversation.
+%define CH_ID           0
+%define CH_AUTHOR       4
+%define CH_CREATED      8
+%define CH_LEN          12              ; u16
+%define CH_PENDING      14
+%define CH_TEXT         16              ; MESSAGE_MAX bytes
+%define CH_SIZE         520
+%define CHAT_MAX        200             ; kept for the open conversation, the oldest go first
+
 %define PENDING_MAX     128
 %define PO_NUM          0
 %define PO_TEAM         4
@@ -84,9 +99,14 @@ fits CI_TITLE, TITLE_MAX, CI_PENDING
 fits CC_TEXT, COMMENT_MAX, CC_SIZE
 fits PO_TEXT, TITLE_MAX, PO_BODY
 fits PO_BODY, DESC_MAX, PO_SIZE
+fits CH_LEN, 2, CH_PENDING
+fits CH_PENDING, 1, CH_TEXT
+fits CH_TEXT, MESSAGE_MAX, CH_SIZE
 
 %define VIEW_MAX        (TEAM_ISSUE_MAX + PENDING_MAX)
 %define VIEW_COMMENTS   (ISSUE_COMMENT_MAX + PENDING_MAX)
+%define VIEW_CHAT       (CHAT_MAX + PENDING_MAX)
+%define UNREAD_MAX      (TEAM_MEMBER_MAX + 1)
 %define STATUS_MAX      128
 
 section .rodata
@@ -106,6 +126,8 @@ resync:         resb 1                  ; resubscribe and resend after the next 
 loaded:         resb 1                  ; the current team's snapshot is complete
 select_new:     resb 1                  ; switch to the team we just created once it shows up
 detail_loaded:  resb 1
+chat_open:      resb 1                  ; the panel shows a conversation instead of issues
+chat_loaded:    resb 1
 token:          resb 32
 alignb 4
 my_id:          resd 1
@@ -131,6 +153,12 @@ alignb 4
 comment_count:  resd 1
 comments:       resb ISSUE_COMMENT_MAX * CC_SIZE
 
+chat_peer:      resd 1                  ; 0 for the team's channel, else the member
+chat_count:     resd 1
+chat_msgs:      resb CHAT_MAX * CH_SIZE
+unread_count:   resd 1
+unread:         resd UNREAD_MAX         ; conversations with messages we haven't seen, by peer
+
 pending_count:  resd 1
 next_op:        resd 1
 pending:        resb PENDING_MAX * PO_SIZE
@@ -147,6 +175,8 @@ view_desc:      resq 1
 view_desc_len:  resd 1
 view_comment_count: resd 1
 view_comments:  resb VIEW_COMMENTS * CC_SIZE
+view_chat_count: resd 1
+view_chat:      resb VIEW_CHAT * CH_SIZE
 
 auth_msg_len:   resd 1
 auth_msg:       resb STATUS_MAX
@@ -206,6 +236,9 @@ clear_team_view:
     mov [team_seq], eax
     mov [loaded], al
     mov [detail_issue], eax
+    mov [chat_open], al
+    mov [chat_count], eax
+    mov [unread_count], eax
     lea rdi, [labels]
     mov ecx, LABEL_SLOTS * LB_SIZE + PROJECT_SLOTS * PJ_SIZE  ; projects follows labels
     rep stosb
@@ -255,7 +288,7 @@ sync_on_message:
     call rd_begin
     call rd_u8
     sub eax, MSG_AUTH_OK
-    cmp eax, MSG_ISSUE_DETAIL - MSG_AUTH_OK
+    cmp eax, MSG_UNREAD - MSG_AUTH_OK
     ja .bad
     lea rcx, [.table]
     call [rcx + rax * 8]
@@ -273,6 +306,7 @@ sync_on_message:
 .table:
     dq on_auth_ok, on_auth_fail, on_error, on_teams, on_snapshot, on_event
     dq on_ack, on_members, on_logged_out, on_team_meta, on_issue_detail
+    dq on_chat, on_chat_history, on_unread
 
 on_auth_ok:
     push rbx
@@ -643,6 +677,7 @@ on_snapshot:
     jz .rebuild
     mov byte [loaded], 1
     call send_open_issue                    ; after a reconnect the detail view needs it again
+    call send_open_chat                     ; and so does the chat, subscribing closed it
 .rebuild:
     call rebuild_view
     jmp .done
@@ -1031,6 +1066,7 @@ on_members:
     jmp .member
 .read:
     mov [member_count], r12d
+    call ui_members_changed
     jmp .done
 .bad:
     mov byte [rd_bad], 1
@@ -1081,11 +1117,13 @@ send_op:
     cmp eax, OP_SET_FIELD
     je .set
     cmp eax, OP_SET_LABEL
-    jae .named
-    mov esi, [rbx + PO_ISSUE]               ; delete and comment
+    je .named
+    cmp eax, OP_SET_PROJECT
+    je .named
+    mov esi, [rbx + PO_ISSUE]               ; delete, comment and message
     call wr_u32
-    cmp byte [rbx + PO_KIND], OP_COMMENT
-    jne .send
+    cmp byte [rbx + PO_KIND], OP_DELETE_ISSUE
+    je .send
     jmp .body
 .create:
     movzx esi, byte [rbx + PO_STATUS]
@@ -1167,10 +1205,9 @@ queue_draft:
     mov [rbx + PO_TEAM], eax
     inc dword [pending_count]
     ; Before TEAMS arrives the resend loop will pick it up instead.
-    cmp byte [authed], 0
-    je .queued
-    cmp byte [resync], 0
-    jne .queued
+    call can_send
+    test eax, eax
+    jz .queued
     mov rdi, rbx
     call send_op
 .queued:
@@ -1259,15 +1296,17 @@ sync_set_description:
     pop rbx
     ret
 
-; edi = issue, rsi = text, edx = length
-sync_comment:
+; A comment on an issue, or a message to the channel or a member.
+; edi = the issue or peer, rsi = text, edx = length, ecx = OP_COMMENT or OP_MESSAGE
+; -> eax = 1 if queued
+sync_text:
     push rbx
     push r12
     push r13
     mov ebx, edi
     mov r12, rsi
     mov r13d, edx
-    mov edi, OP_COMMENT
+    mov edi, ecx
     call new_op
     mov [rax + PO_ISSUE], ebx
     mov rsi, r12
@@ -1315,14 +1354,21 @@ sync_set_named:
     pop rbx
     ret
 
+; -> eax = 1 if we're logged in and caught up, so requests can go out now
+can_send:
+    xor eax, eax
+    cmp byte [authed], 0
+    je .done
+    cmp byte [resync], 0
+    sete al
+.done:
+    ret
+
 ; -> eax = 1 if online and logged in, else the footer says why not
 require_online:
-    mov eax, 1
-    cmp byte [authed], 0
-    je .offline
-    cmp byte [resync], 0
-    je .done
-.offline:
+    call can_send
+    test eax, eax
+    jnz .done
     lea rsi, [st_offline]
     mov edx, st_offline_len
     call set_status
@@ -1411,10 +1457,9 @@ sync_select_team:
     je .done
     mov [current_team], edi
     call clear_team_view
-    cmp byte [authed], 0
-    je .done
-    cmp byte [resync], 0
-    jne .done
+    call can_send
+    test eax, eax
+    jz .done
     jmp send_subscribe
 .done:
     ret
@@ -1426,15 +1471,338 @@ sync_open_issue:
     mov [desc_len], eax
     mov [comment_count], eax
     mov [detail_loaded], al
-    cmp byte [authed], 0
-    je .done
-    cmp byte [resync], 0
-    jne .done
+    call can_send
+    test eax, eax
+    jz .done
     cmp byte [loaded], 0
     je .done                                ; the snapshot's end asks for it
     call send_open_issue
 .done:
     jmp rebuild_view
+
+; Opens a conversation in the panel. edi = peer, 0 for the team's channel
+sync_open_chat:
+    mov [chat_peer], edi
+    mov byte [chat_open], 1
+    xor eax, eax
+    mov [chat_count], eax
+    mov [chat_loaded], al
+    call clear_unread
+    call can_send
+    test eax, eax
+    jz .done
+    cmp byte [loaded], 0
+    je .done                                ; the snapshot's end asks for it
+    call send_open_chat
+.done:
+    jmp rebuild_chat
+
+; Closes the open conversation, here and on the server.
+sync_close_chat:
+    cmp byte [chat_open], 0
+    je .done
+    mov byte [chat_open], 0
+    mov dword [chat_count], 0
+    call rebuild_chat
+    call can_send
+    test eax, eax
+    jz .done                                ; subscribing again closes it on the server anyway
+    mov esi, -1
+    jmp send_chat_request
+.done:
+    ret
+
+; Asks for the open conversation's messages.
+send_open_chat:
+    mov byte [chat_loaded], 0
+    cmp byte [chat_open], 0
+    je .done
+    mov esi, [chat_peer]
+    jmp send_chat_request
+.done:
+    ret
+
+; esi = the peer to open, or -1 to close
+send_chat_request:
+    push rsi
+    lea rdi, [out_msg]
+    mov esi, MSG_OPEN_CHAT
+    call wr_u8
+    pop rsi
+    call wr_u32
+    jmp send_built
+
+; edi = peer -> eax = its index in unread, or -1
+find_unread:
+    xor eax, eax
+.loop:
+    cmp eax, [unread_count]
+    jae .none
+    cmp [unread + rax * 4], edi
+    je .done
+    inc eax
+    jmp .loop
+.none:
+    mov eax, -1
+.done:
+    ret
+
+; edi = peer
+mark_unread:
+    call find_unread
+    cmp eax, -1
+    jne .done
+    mov eax, [unread_count]
+    cmp eax, UNREAD_MAX
+    jae .done
+    mov [unread + rax * 4], edi
+    inc dword [unread_count]
+.done:
+    ret
+
+; edi = peer
+clear_unread:
+    call find_unread
+    cmp eax, -1
+    je .done
+    dec dword [unread_count]                ; the last one fills the gap
+    mov ecx, [unread_count]
+    mov edx, [unread + rcx * 4]
+    mov [unread + rax * 4], edx
+.done:
+    ret
+
+; Reads a message off the wire into a chat row. rdi = row -> eax = who it went to
+read_message:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov rbx, rdi
+    call rd_u32
+    mov [rbx + CH_ID], eax
+    call rd_u32
+    mov [rbx + CH_AUTHOR], eax
+    call rd_u32
+    mov r12d, eax
+    call rd_u32
+    mov [rbx + CH_CREATED], eax
+    call rd_str16
+    cmp edx, MESSAGE_MAX
+    ja .bad
+    mov [rbx + CH_LEN], dx
+    mov byte [rbx + CH_PENDING], 0
+    lea rdi, [rbx + CH_TEXT]
+    mov rsi, rax
+    call put_mem
+    jmp .done
+.bad:
+    mov byte [rd_bad], 1
+.done:
+    mov eax, r12d
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
+; MSG_CHAT: a new message. Shown if its conversation is open, otherwise it marks that one unread.
+on_chat:
+    push rbx
+    push r12
+    push r13
+    sub rsp, CH_SIZE + 8
+    call rd_u32
+    mov ebx, eax                            ; team
+    mov rdi, rsp
+    call read_message
+    cmp byte [rd_bad], 0
+    jne .done
+    cmp ebx, [current_team]
+    jne .done
+    ; The conversation it's in, from our side: the channel, whoever we
+    ; sent it to, or whoever sent it to us.
+    mov r12d, eax
+    test r12d, r12d
+    jz .have_peer
+    mov r13d, [rsp + CH_AUTHOR]
+    cmp r13d, [my_id]
+    je .have_peer
+    mov r12d, r13d
+.have_peer:
+    cmp byte [chat_open], 0
+    je .unread
+    cmp r12d, [chat_peer]
+    jne .unread
+    cmp byte [chat_loaded], 0
+    je .done                                ; CHAT_HISTORY will include it
+    mov rsi, rsp
+    call append_chat
+    call rebuild_chat
+    jmp .done
+.unread:
+    mov eax, [rsp + CH_AUTHOR]
+    cmp eax, [my_id]
+    je .done
+    mov edi, r12d
+    call mark_unread
+.done:
+    add rsp, CH_SIZE + 8
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Adds a message to the open conversation, dropping the oldest when full. rsi = row
+append_chat:
+    push rbx
+    mov rbx, rsi
+    cmp dword [chat_count], CHAT_MAX
+    jb .copy
+    lea rdi, [chat_msgs]
+    lea rsi, [chat_msgs + CH_SIZE]
+    mov edx, (CHAT_MAX - 1) * CH_SIZE
+    call memmove
+    dec dword [chat_count]
+.copy:
+    mov eax, [chat_count]
+    imul eax, eax, CH_SIZE
+    lea rdi, [chat_msgs + rax]
+    mov rsi, rbx
+    mov ecx, CH_SIZE
+    rep movsb
+    inc dword [chat_count]
+    pop rbx
+    ret
+
+; MSG_CHAT_HISTORY: the open conversation's newest messages, replacing what's shown.
+on_chat_history:
+    push rbx
+    push r12
+    push r13
+    call rd_u32
+    mov ebx, eax
+    call rd_u32
+    mov r12d, eax
+    call rd_u8
+    mov r13d, eax
+    cmp ebx, [current_team]
+    jne .skip
+    cmp byte [chat_open], 0
+    je .skip
+    cmp r12d, [chat_peer]
+    jne .skip
+    cmp r13d, CHAT_MAX
+    ja .bad
+    mov [chat_count], r13d
+    lea rbx, [chat_msgs]
+.message:
+    test r13d, r13d
+    jz .read
+    mov rdi, rbx
+    call read_message
+    add rbx, CH_SIZE
+    dec r13d
+    jmp .message
+.read:
+    mov byte [chat_loaded], 1
+    mov edi, r12d                           ; UNREAD may have come in after we asked
+    call clear_unread
+    call rebuild_chat
+    jmp .done
+.bad:
+    mov byte [rd_bad], 1
+    jmp .done
+.skip:
+    call rd_skip
+.done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; MSG_UNREAD: the conversations with messages we haven't seen, replacing the old list.
+on_unread:
+    push rbx
+    push r12
+    sub rsp, 8
+    call rd_u32
+    mov ebx, eax
+    call rd_u8
+    mov r12d, eax
+    cmp ebx, [current_team]
+    jne .skip
+    cmp r12d, UNREAD_MAX
+    ja .bad
+    mov dword [unread_count], 0
+.peer:
+    test r12d, r12d
+    jz .done
+    call rd_u32
+    mov edi, eax
+    call mark_unread
+    dec r12d
+    jmp .peer
+.bad:
+    mov byte [rd_bad], 1
+    jmp .done
+.skip:
+    call rd_skip
+.done:
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
+; The open conversation with our unsent messages to it after: what the chat shows.
+rebuild_chat:
+    push rbx
+    push rbp
+    push r12
+    mov ecx, [chat_count]
+    mov [view_chat_count], ecx
+    imul ecx, ecx, CH_SIZE
+    lea rdi, [view_chat]
+    lea rsi, [chat_msgs]
+    rep movsb
+    cmp byte [chat_open], 0
+    je .done
+    lea rbx, [pending]
+    mov ebp, [pending_count]
+.op:
+    test ebp, ebp
+    jz .done
+    cmp byte [rbx + PO_KIND], OP_MESSAGE
+    jne .next
+    mov eax, [current_team]
+    cmp [rbx + PO_TEAM], eax
+    jne .next
+    mov eax, [chat_peer]
+    cmp [rbx + PO_ISSUE], eax
+    jne .next
+    mov eax, [view_chat_count]
+    imul eax, eax, CH_SIZE
+    lea r12, [view_chat + rax]
+    inc dword [view_chat_count]
+    mov dword [r12 + CH_ID], 0
+    mov eax, [my_id]
+    mov [r12 + CH_AUTHOR], eax
+    call unix_now
+    mov [r12 + CH_CREATED], eax
+    mov byte [r12 + CH_PENDING], 1
+    movzx ecx, word [rbx + PO_BODY_LEN]
+    mov [r12 + CH_LEN], cx
+    lea rdi, [r12 + CH_TEXT]
+    lea rsi, [rbx + PO_BODY]
+    rep movsb
+.next:
+    add rbx, PO_SIZE
+    dec ebp
+    jmp .op
+.done:
+    mov byte [need_redraw], 1
+    pop r12
+    pop rbp
+    pop rbx
+    ret
 
 ; Unsynced changes are dropped along with the session.
 sync_logout:
@@ -1546,7 +1914,9 @@ rebuild_view:
     je .comment
     cmp eax, OP_SET_LABEL
     je .label
-    jmp .project
+    cmp eax, OP_SET_PROJECT
+    je .project
+    jmp .next                               ; messages show in the chat
 
 .create:
     mov eax, [view_count]
@@ -1699,6 +2069,7 @@ rebuild_view:
     jmp .op
 .done:
     mov byte [need_redraw], 1
+    call rebuild_chat
     call ui_view_changed
     add rsp, 8
     pop r15

@@ -12,7 +12,7 @@ section .bss
 ; The op being applied, as h_op parsed it.
 op_team:        resq 1                      ; team row
 op_user:        resd 1
-op_issue:       resd 1
+op_issue:       resd 1                      ; or who a message goes to
 op_field:       resd 1                      ; or a label or project slot
 op_value:       resd 1                      ; or a color
 op_status:      resd 1
@@ -23,12 +23,13 @@ op_labels:      resd 1
 op_text_len:    resd 1
 op_body_len:    resd 1
 op_text:        resq 1                      ; a title or name
-op_body:        resq 1                      ; a description or comment
+op_body:        resq 1                      ; a description, comment or message
 
 section .rodata
 align 8
 op_handlers:
     dq 0, op_create_issue, op_set_field, op_delete_issue, op_comment, op_set_label, op_set_project
+    dq op_message
 OP_KINDS equ ($ - op_handlers) / 8
 
 section .text
@@ -208,9 +209,15 @@ h_subscribe:
     mov rax, [cur]
     mov ebx, [rax + C_TEAM]
     mov [rax + C_TEAM], r12d
+    and byte [rax + C_FLAGS], ~F_CHAT       ; conversations belong to the team left behind
     mov edi, [cur_idx]
     mov esi, r12d
     call send_snapshot
+    mov rax, [cur]
+    mov edi, [cur_idx]
+    mov esi, r12d
+    mov edx, [rax + C_USER]
+    call send_unread
     mov edi, r12d
     call broadcast_members
     test ebx, ebx
@@ -441,6 +448,8 @@ h_op:
     je .read_issue
     cmp r13d, OP_COMMENT
     je .read_comment
+    cmp r13d, OP_MESSAGE
+    je .read_comment                        ; the same shape: u32, str16
     cmp r13d, OP_SET_LABEL
     je .read_named
     cmp r13d, OP_SET_PROJECT

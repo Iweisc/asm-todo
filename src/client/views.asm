@@ -1,5 +1,5 @@
 ; The screens: login, the sidebar, the list and board, the issue detail
-; view and the two modals.
+; view and the two modals. The chat is drawn in chat.asm.
 
 section .rodata
 text s_new_issue,       "New issue"
@@ -505,29 +505,39 @@ draw_login:
 
 ; --- sidebar ---
 
-; One sidebar row: highlight and hit region. side_selected marks the current one.
-; edi = y, esi = action, edx = arg. 28px tall.
+; One sidebar row: highlight and hit region. side_selected marks the current
+; one, but while a conversation is open only its row can be current.
+; edi = y, esi = action, edx = arg. 28px tall. -> eax = the row's background
 side_row:
     push rbx
     push r12
     push r13
+    push r14
+    sub rsp, 8
     mov ebx, edi
     mov r12d, esi
     mov r13d, edx
-    mov r8d, C_SELECT
+    mov r14d, C_SELECT
     cmp byte [side_selected], 0
-    jne .fill
+    je .hover
+    cmp byte [chat_open], 0
+    je .fill
+    cmp r12d, A_CHAT
+    je .fill
+.hover:
     mov edi, r12d
     mov esi, r13d
     call hovering
+    mov r14d, C_BG
     test eax, eax
     jz .hit
-    mov r8d, C_HOVER
+    mov r14d, C_HOVER
 .fill:
     mov edi, 8
     mov esi, ebx
     mov edx, SIDEBAR_W - 16
     mov ecx, 28
+    mov r8d, r14d
     mov r9d, 6
     call fill_rrect
 .hit:
@@ -539,6 +549,53 @@ side_row:
     mov r9d, r13d
     call add_hit
     mov byte [side_selected], 0
+    mov eax, r14d
+    add rsp, 8
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; A sidebar row that opens a conversation: current while it's open, with a
+; dot when it has messages we haven't seen.
+; edi = y, esi = peer, edx = the dot's x -> eax = the row's background, ecx = 1 if unread
+chat_side_row:
+    push rbx
+    push r12
+    push r13
+    push r14
+    sub rsp, 8
+    mov ebx, edi
+    mov r12d, esi
+    mov r13d, edx
+    xor eax, eax
+    cmp byte [chat_open], 0
+    je .current
+    cmp r12d, [chat_peer]
+    sete al
+.current:
+    mov [side_selected], al
+    mov edi, ebx
+    mov esi, A_CHAT
+    mov edx, r12d
+    call side_row
+    mov r14d, eax
+    mov edi, r12d
+    call find_unread
+    xor ecx, ecx
+    cmp eax, -1
+    je .done
+    lea edi, [r13d * 4]
+    lea esi, [ebx * 4 + 56]
+    mov edx, 12
+    mov ecx, C_ACCENT_HI
+    call aa_disc
+    mov ecx, 1
+.done:
+    mov eax, r14d
+    add rsp, 8
+    pop r14
     pop r13
     pop r12
     pop rbx
@@ -717,7 +774,7 @@ draw_sidebar:
     xor r14d, r14d
 .team_view:
     cmp r14d, V_MINE
-    jae .next_team
+    jae .channel
     cmp [view_mode], r14d
     jne .not_current
     cmp dword [filter_project], 0
@@ -746,6 +803,21 @@ draw_sidebar:
     add ebx, 30
     inc r14d
     jmp .team_view
+.channel:
+    mov edi, ebx
+    xor esi, esi
+    mov edx, SIDEBAR_W - 26
+    call chat_side_row
+    mov r8d, INK(C_TEXT, ST_BODY)
+    mov eax, INK(0xffffff, ST_MEDIUM)       ; unread
+    test ecx, ecx
+    cmovnz r8d, eax
+    mov edi, 52
+    lea esi, [ebx + 19]
+    lea rdx, [s_general]
+    mov ecx, s_general_len
+    call draw_text
+    add ebx, 30
 .next_team:
     add r12, CO_SIZE
     dec r13d
@@ -816,6 +888,18 @@ draw_sidebar:
 .member:
     test r13d, r13d
     jz .invite
+    mov edi, ebx                            ; the row opens a conversation with them
+    mov esi, [r12 + CM_ID]
+    mov edx, SIDEBAR_W - 72
+    call chat_side_row
+    mov [rsp], eax                          ; the row's background
+    mov r14d, INK(C_TEXT, ST_BODY)          ; how their name reads, and its room
+    mov r15d, SIDEBAR_W - 110
+    test ecx, ecx
+    jz .avatar
+    mov r14d, INK(0xffffff, ST_MEDIUM)      ; unread, and the dot takes some room
+    mov r15d, SIDEBAR_W - 124
+.avatar:
     mov edi, 16
     lea esi, [ebx + 5]
     mov edx, 18
@@ -825,7 +909,7 @@ draw_sidebar:
     mov edi, 4 * 31                         ; online dot on the avatar's corner
     lea esi, [ebx * 4 + 4 * 21]
     mov edx, 14
-    mov ecx, C_BG
+    mov ecx, [rsp]
     call aa_disc
     mov ecx, C_ONLINE
     cmp byte [r12 + CM_ONLINE], 0
@@ -840,8 +924,8 @@ draw_sidebar:
     lea esi, [ebx + 19]
     lea rdx, [r12 + CM_NAME]
     movzx ecx, byte [r12 + CM_NAME_LEN]
-    mov r8d, INK(C_TEXT, ST_BODY)
-    mov r9d, SIDEBAR_W - 110
+    mov r8d, r14d
+    mov r9d, r15d
     call draw_text_fit
     cmp byte [r12 + CM_ROLE], ROLE_OWNER
     jne .member_action
@@ -982,6 +1066,8 @@ draw_header:
     call draw_text
     lea edi, [eax + 8]
     mov [rsp], edi
+    cmp byte [chat_open], 0
+    jne .chat_name
     cmp dword [detail_issue], 0
     jne .issue_id
     mov eax, [view_mode]
@@ -996,6 +1082,10 @@ draw_header:
     lea rdx, [view_projects + rax + LB_NAME]
     movzx ecx, byte [view_projects + rax + LB_NAME_LEN]
     jmp .crumb
+.chat_name:
+    lea rdi, [scratch]
+    call put_chat_name
+    jmp .scratch_crumb
 .issue_id:
     mov edi, [detail_issue]
     call find_view_issue
@@ -1004,6 +1094,7 @@ draw_header:
     lea rdi, [scratch]
     mov rsi, rax
     call put_issue_id
+.scratch_crumb:
     lea rdx, [scratch]
     mov rcx, rdi
     sub rcx, rdx
@@ -1012,57 +1103,13 @@ draw_header:
     lea esi, [r12d + 27]
     mov r8d, INK(C_TEXT, ST_MEDIUM)
     call draw_text
+    cmp byte [chat_open], 0
+    jne .close
     cmp dword [detail_issue], 0
     jne .close
-
-    ; List and board, as a two-part switch at the right.
-    lea r14d, [ebx + r13d - 132]
-    mov edi, r14d
-    lea esi, [r12d + 8]
-    mov edx, 116
-    mov ecx, 28
-    mov r8d, C_LINE
-    mov r9d, C_PANEL
-    mov r10d, 6
-    call outline_rrect
-    movzx eax, byte [board]
-    imul eax, eax, 57
-    lea edi, [r14d + eax + 2]
-    lea esi, [r12d + 10]
-    mov edx, 55
-    mov ecx, 24
-    mov r8d, C_SELECT
-    mov r9d, 5
-    call fill_rrect
-    mov edi, r14d
-    lea esi, [r12d + 8]
-    mov edx, 58
-    mov ecx, 28
-    mov r8d, A_LAYOUT
-    xor r9d, r9d
-    call add_hit
-    lea edi, [r14d + 58]
-    lea esi, [r12d + 8]
-    mov edx, 58
-    mov ecx, 28
-    mov r8d, A_LAYOUT
-    mov r9d, 1
-    call add_hit
-    mov edi, r14d
-    mov esi, 58
-    mov edx, r12d
-    add edx, 27
-    lea rcx, [s_list]
-    mov r8d, s_list_len
-    mov r9d, INK(C_TEXT, ST_SMALL)
-    call draw_centered
-    lea edi, [r14d + 58]
-    mov esi, 58
-    lea edx, [r12d + 27]
-    lea rcx, [s_board]
-    mov r8d, s_board_len
-    mov r9d, INK(C_TEXT, ST_SMALL)
-    call draw_centered
+    lea edi, [ebx + r13d - 132]
+    mov esi, r12d
+    call draw_layout_switch
     jmp .done
 .close:
     lea r14d, [ebx + r13d - 44]
@@ -1097,6 +1144,63 @@ draw_header:
     add rsp, 8
     pop r14
     pop r13
+    pop r12
+    pop rbx
+    ret
+
+; List and board, as a two-part switch. edi = x, esi = the header's y
+draw_layout_switch:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov ebx, edi
+    mov r12d, esi
+    lea esi, [r12d + 8]
+    mov edx, 116
+    mov ecx, 28
+    mov r8d, C_LINE
+    mov r9d, C_PANEL
+    mov r10d, 6
+    call outline_rrect
+    movzx eax, byte [board]
+    imul eax, eax, 57
+    lea edi, [ebx + eax + 2]
+    lea esi, [r12d + 10]
+    mov edx, 55
+    mov ecx, 24
+    mov r8d, C_SELECT
+    mov r9d, 5
+    call fill_rrect
+    mov edi, ebx
+    lea esi, [r12d + 8]
+    mov edx, 58
+    mov ecx, 28
+    mov r8d, A_LAYOUT
+    xor r9d, r9d
+    call add_hit
+    lea edi, [ebx + 58]
+    lea esi, [r12d + 8]
+    mov edx, 58
+    mov ecx, 28
+    mov r8d, A_LAYOUT
+    mov r9d, 1
+    call add_hit
+    mov edi, ebx
+    mov esi, 58
+    mov edx, r12d
+    add edx, 27
+    lea rcx, [s_list]
+    mov r8d, s_list_len
+    mov r9d, INK(C_TEXT, ST_SMALL)
+    call draw_centered
+    lea edi, [ebx + 58]
+    mov esi, 58
+    lea edx, [r12d + 27]
+    lea rcx, [s_board]
+    mov r8d, s_board_len
+    mov r9d, INK(C_TEXT, ST_SMALL)
+    call draw_centered
+    add rsp, 8
     pop r12
     pop rbx
     ret
@@ -2769,6 +2873,8 @@ draw_app:
     mov ecx, 1
     mov r8d, C_LINE
     call fill_rect
+    cmp byte [chat_open], 0
+    jne .chat
     cmp dword [detail_issue], 0
     jne .detail
     mov edi, ebx
@@ -2799,6 +2905,13 @@ draw_app:
     mov edx, r13d
     lea ecx, [r14d - HEADER_H]
     call draw_detail
+    jmp .modal
+.chat:
+    mov edi, ebx
+    lea esi, [r12d + HEADER_H]
+    mov edx, r13d
+    lea ecx, [r14d - HEADER_H]
+    call draw_chat
     jmp .modal
 .no_team:
     mov r15d, r14d

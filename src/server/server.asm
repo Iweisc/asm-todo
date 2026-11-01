@@ -1,5 +1,5 @@
-; todo-server: accounts, teams and live-synced issue tracking over
-; WebSocket, with every message inside a Noise_NK channel.
+; todo-server: accounts, teams, live-synced issue tracking and team chat
+; over WebSocket, with every message inside a Noise_NK channel.
 ;
 ; Usage: todo-server [database-path] [ip:port]
 ;        defaults: ./issues.db and 127.0.0.1:8080
@@ -45,6 +45,7 @@ global _start
 %include "handlers.asm"
 %include "teams.asm"
 %include "issues.asm"
+%include "messages.asm"
 
 _start:
     call ignore_sigpipe
