@@ -13,6 +13,7 @@ Needs `nasm`, `ld` and `make`.
 make          # builds build/todo-server and build/todo-client
 make test     # crypto test vectors
 make preview  # renders every text style and icon to build/preview.ppm
+make lint     # function length, file length and function comments
 make run      # starts the server with ./issues.db, opens a window, stops the server on close
 ```
 
@@ -22,6 +23,8 @@ Or run them separately:
 build/todo-server [database-path] [ip:port]       # defaults: ./issues.db, 127.0.0.1:8080
 build/todo-client <server-key> [ip:port]
 ```
+
+`CONTRIBUTING.md` has the rules for changes. CI runs the build, the tests and the lint on every pull request.
 
 The server prints its public key at startup and writes it to `<database-path>.pub`. The client needs that key and refuses any server that can't prove it holds the matching private key.
 

@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    # Built from source so CI runs the same nasm as the tree is written against.
+    # Ubuntu's package lags, and the warning set changes between releases.
+    env:
+      NASM_VERSION: "3.02"
+      NASM_SHA256: 87336eba53b4acfe917424ab5d500d2b0054d9f5148d35c2273ccf2cfb712f0d
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: nasm
+        with:
+          path: ~/nasm
+          key: nasm-${{ env.NASM_VERSION }}
+      - name: build nasm
+        if: steps.nasm.outputs.cache-hit != 'true'
+        run: |
+          curl -sSfLo nasm.tar.xz "https://www.nasm.us/pub/nasm/releasebuilds/$NASM_VERSION/nasm-$NASM_VERSION.tar.xz"
+          echo "$NASM_SHA256  nasm.tar.xz" | sha256sum -c
+          tar xf nasm.tar.xz
+          cd "nasm-$NASM_VERSION"
+          ./configure
+          make -j"$(nproc)"
+          mkdir -p ~/nasm
+          cp nasm ~/nasm/
+      - run: echo "$HOME/nasm" >> "$GITHUB_PATH"
+      - run: nasm -v
+      - run: make
+      - run: make test
+      - run: make lint
+      - run: make preview
