@@ -1,16 +1,11 @@
 # Already over the line when make lint arrived. Remove lines as they get fixed, never add.
 bigfile src/client/sync.asm
 bigfile src/client/views.asm
-bigfile src/client/widgets.asm
 long src/client/sync.asm on_event
 long src/client/sync.asm rebuild_view
 long src/client/views.asm draw_board
 long src/client/views.asm draw_create
-long src/client/views.asm draw_detail
 long src/client/views.asm draw_row
-long src/client/views.asm draw_sidebar
-long src/client/widgets.asm build_menu
-long src/client/widgets.asm draw_menu
 long src/server/issues.asm h_op
 long tests/crypto_test.asm fuzz
 long tests/crypto_test.asm vectors
@@ -37,20 +32,11 @@ nocomment src/client/sync.asm pop_pending
 nocomment src/client/sync.asm send_subscribe
 nocomment src/client/sync.asm sync_on_offline
 nocomment src/client/sync.asm sync_on_open
-nocomment src/client/text.asm aa_dashed_ring
-nocomment src/client/text.asm cov_disc
-nocomment src/client/text.asm cov_ring
-nocomment src/client/text.asm cov_strokes
-nocomment src/client/text.asm raster_cell
-nocomment src/client/text.asm ring_common
-nocomment src/client/ui.asm cancel_drag
-nocomment src/client/ui.asm close_menu
 nocomment src/client/ui.asm open_team_modal
 nocomment src/client/ui.asm submit_create
 nocomment src/client/ui.asm submit_team
 nocomment src/client/ui.asm ui_layout_changed
 nocomment src/client/views.asm draw_create
-nocomment src/client/views.asm draw_sidebar
 nocomment src/client/views.asm draw_team_modal
 nocomment src/client/wayland.asm on_keyboard
 nocomment src/client/wayland.asm on_sync

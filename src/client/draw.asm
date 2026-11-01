@@ -1,5 +1,5 @@
 ; The framebuffer being drawn, the clip rectangle, solid rectangles and
-; blending. Text and anti-aliased shapes live in text.asm.
+; blending. Text lives in text.asm and anti-aliased shapes in shapes.asm.
 
 section .bss
 

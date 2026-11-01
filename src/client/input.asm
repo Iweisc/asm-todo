@@ -18,6 +18,13 @@ keymap_shift:
     db "ZXCVBNM<>?", 0, "*", 0, " "
     times 128 - ($ - keymap_shift) db 0
 
+; Fields that Tab moves between: from, to.
+tab_pairs:
+    dd F_USER, F_PASS, F_PASS, F_USER
+    dd F_NEW_TITLE, F_NEW_DESC, F_NEW_DESC, F_NEW_TITLE
+    dd F_TEAM_NAME, F_TEAM_KEY, F_TEAM_KEY, F_TEAM_NAME
+    dd -1
+
 section .bss
 field_changed:  resb 1
 
@@ -203,6 +210,10 @@ ui_click:
     mov dword [status_len], 0               ; clicking dismisses the message
     mov eax, [hover_action]
     mov edi, [hover_arg]
+    cmp eax, A_DELETE
+    je .armed
+    mov dword [delete_armed], 0             ; any other click backs out of deleting
+.armed:
     cmp eax, A_CHAT
     ja .done
     jmp [.table + rax * 8]
@@ -224,10 +235,7 @@ ui_click:
     je .edit
     call set_focus
     mov edi, [focus]
-    call field_addr
-    mov ecx, [rax + FD_LEN]
-    mov [rax + FD_CURSOR], ecx
-    ret
+    jmp place_caret
 .edit:
     jmp begin_edit
 .login:
@@ -313,6 +321,12 @@ ui_click:
     jmp set_focus
 .delete:
     mov edi, [detail_issue]
+    cmp edi, [delete_armed]
+    je .confirmed
+    mov [delete_armed], edi
+    ret
+.confirmed:
+    mov dword [delete_armed], 0
     call sync_delete_issue
     jmp close_detail
 .row_status:
@@ -365,34 +379,52 @@ ui_release:
     pop rbx
     ret
 
-; edi = scroll amount in pixels, as reported by the compositor
+; edi = scroll amount in pixels, as reported by the compositor,
+; esi = 1 when it's sideways
 ui_scroll:
     cmp byte [menu_open], 0
-    jne .done
+    jne .menu
     cmp byte [modal], M_NONE
     jne .done
     lea edi, [edi + edi * 2]
+    cmp dword [pointer_x], SIDEBAR_W
+    jl .sidebar
     cmp byte [chat_open], 0
     jne .chat
     cmp dword [detail_issue], 0
     jne .detail
     cmp byte [board], 0
     je .list
-    test dword [modifiers], MOD_SHIFT
+    test esi, esi
+    jnz .sideways
+    test dword [modifiers], MOD_SHIFT       ; Shift turns the wheel sideways
     jz .list
+.sideways:
     add [board_x], edi
     jmp .redraw
+.sidebar:
+    lea rax, [side_scroll]
+    jmp .vertical
 .detail:
-    add [detail_scroll], edi
-    jmp .redraw
+    lea rax, [detail_scroll]
+    jmp .vertical
 .chat:
-    sub [chat_scroll], edi                  ; it counts up from the bottom
-    jmp .redraw
+    neg edi                                 ; it counts up from the bottom
+    lea rax, [chat_scroll]
+    jmp .vertical
 .list:
-    add [scroll_y], edi
+    lea rax, [scroll_y]
+.vertical:
+    test esi, esi                           ; only the board scrolls sideways
+    jnz .done
+    add [rax], edi
 .redraw:
     mov byte [need_redraw], 1
 .done:
+    ret
+.menu:
+    test esi, esi
+    jz menu_wheel_by
     ret
 
 ; edi = key code -> eax = the character it types with the current modifiers, or 0
@@ -602,13 +634,12 @@ field_command:
     call submit_team
     jmp .handled
 .member:
+    ; The box empties when the name joins, so a failed invite keeps it.
     mov edi, F_MEMBER
     call field_trimmed
     test edx, edx
     jz .handled
     call sync_add_member
-    mov edi, F_MEMBER
-    call field_clear
     jmp .handled
 .comment:
     test eax, MOD_SHIFT
@@ -632,6 +663,8 @@ field_command:
     jbe .clear
     cmp ebx, F_MENU
     je .close_menu
+    cmp ebx, F_MESSAGE                      ; typing anywhere refocuses the box, so leave
+    je .leave_chat
     cmp ebx, F_TEAM_KEY
     jbe .close_modal                        ; F_NEW_TITLE..F_TEAM_KEY
     cmp ebx, F_TITLE
@@ -645,6 +678,9 @@ field_command:
 .close_menu:
     call close_menu
     jmp .handled
+.leave_chat:
+    call close_detail
+    jmp .handled
 .close_modal:
     mov byte [modal], M_NONE
 .unfocus:
@@ -652,25 +688,15 @@ field_command:
     call set_focus
     jmp .handled
 .tab:
-    ; Pairs of fields that Tab moves between.
-    mov edi, F_PASS
-    cmp ebx, F_USER
+    lea rcx, [tab_pairs]
+.pair:
+    mov edi, [rcx + 4]
+    cmp ebx, [rcx]
     je .move
-    mov edi, F_USER
-    cmp ebx, F_PASS
-    je .move
-    mov edi, F_NEW_DESC
-    cmp ebx, F_NEW_TITLE
-    je .move
-    mov edi, F_NEW_TITLE
-    cmp ebx, F_NEW_DESC
-    je .move
-    mov edi, F_TEAM_KEY
-    cmp ebx, F_TEAM_NAME
-    je .move
-    mov edi, F_TEAM_NAME
-    cmp ebx, F_TEAM_KEY
-    jne .handled
+    add rcx, 8
+    cmp dword [rcx], -1
+    jne .pair
+    jmp .handled
 .move:
     call set_focus
 .handled:

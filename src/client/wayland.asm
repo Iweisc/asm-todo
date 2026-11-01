@@ -562,8 +562,9 @@ on_pointer:
     je ui_click
     jmp ui_release
 .axis:
-    cmp dword [rdx + 4], 0                  ; vertical scroll
-    jne .done
+    mov esi, [rdx + 4]                      ; 0 vertical, 1 sideways
+    cmp esi, 1
+    ja .done
     mov edi, [rdx + 8]
     sar edi, 8
     jmp ui_scroll

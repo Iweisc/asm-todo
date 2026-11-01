@@ -23,6 +23,7 @@ global _start
 %include "font.asm"
 %include "draw.asm"
 %include "text.asm"
+%include "shapes.asm"
 %include "icons.asm"
 
 section .rodata

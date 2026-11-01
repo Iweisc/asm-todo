@@ -182,6 +182,7 @@ auth_msg_len:   resd 1
 auth_msg:       resb STATUS_MAX
 status_len:     resd 1
 status_msg:     resb STATUS_MAX
+status_until:   resq 1                  ; now_ms when the footer message goes away
 out_msg:        resb 2048
 
 section .text
@@ -204,7 +205,10 @@ send_built:
     sub rdx, rsi
     jmp net_send
 
-; rsi = text, edx = length. Footer message, shown until the next action.
+%define STATUS_MS       5000            ; how long a footer message stays up
+
+; rsi = text, edx = length. Footer message, shown until the next action or
+; for STATUS_MS.
 set_status:
     cmp edx, STATUS_MAX
     jbe .fits
@@ -213,8 +217,11 @@ set_status:
     mov [status_len], edx
     lea rdi, [status_msg]
     call put_mem
-    mov byte [need_redraw], 1
-    ret
+    call now_ms
+    add rax, STATUS_MS
+    mov [status_until], rax
+    lea rdi, [status_msg]
+    jmp capitalize
 
 ; rsi = text, edx = length. The message on the login screen.
 set_auth_msg:
@@ -225,7 +232,43 @@ set_auth_msg:
     mov [auth_msg_len], edx
     lea rdi, [auth_msg]
     call put_mem
+    lea rdi, [auth_msg]
+; The server's messages start lowercase, so they can go mid-sentence too.
+; rdi = a message to start with a capital, and redraw
+capitalize:
+    mov al, [rdi]
+    sub al, 'a'
+    cmp al, 'z' - 'a'
+    ja .done
+    sub byte [rdi], 'a' - 'A'
+.done:
     mov byte [need_redraw], 1
+    ret
+
+; -> eax = poll timeout in ms until the footer message goes, -1 with none
+status_timeout:
+    mov eax, -1
+    cmp dword [status_len], 0
+    je .done
+    call now_ms
+    mov rcx, [status_until]
+    sub rcx, rax
+    xor eax, eax
+    test rcx, rcx
+    cmovg eax, ecx
+.done:
+    ret
+
+; Takes the footer message down once its time is up.
+status_tick:
+    cmp dword [status_len], 0
+    je .done
+    call now_ms
+    cmp rax, [status_until]
+    jb .done
+    mov dword [status_len], 0
+    mov byte [need_redraw], 1
+.done:
     ret
 
 ; Forgets the team being viewed.
