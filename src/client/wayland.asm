@@ -559,8 +559,8 @@ on_pointer:
     cmp dword [rdx + 8], 0x110              ; BTN_LEFT
     jne .done
     cmp dword [rdx + 12], 1                 ; pressed
-    jne .done
-    jmp ui_click
+    je ui_click
+    jmp ui_release
 .axis:
     cmp dword [rdx + 4], 0                  ; vertical scroll
     jne .done
