@@ -1,4 +1,4 @@
-NASM := nasm -f elf64 -w+all -w-reloc-rel-dword -w-reloc-abs-qword -w-reloc-abs-dword -I src/common/ -I src/client/ -I src/server/
+NASM := nasm -f elf64 -w+all -w+error -w-reloc-rel-dword -w-reloc-abs-qword -w-reloc-abs-dword -I src/common/ -I src/client/ -I src/server/
 LD := ld -static -nostdlib -z noexecstack
 COMMON := $(wildcard src/common/*.asm src/common/*.inc src/common/crypto/*.asm)
 
@@ -38,7 +38,12 @@ run: all
 	while [ ! -s issues.db.pub ]; do kill -0 $$server 2>/dev/null || exit 1; sleep 0.1; done; \
 	./build/todo-client $$(cat issues.db.pub); kill $$server
 
+# Fails on a new function over 150 lines, file over 1500 lines or function
+# without a comment above it. tests/lint-baseline lists what was already over.
+lint:
+	tests/lint.sh
+
 clean:
 	rm -rf build
 
-.PHONY: all test preview run clean
+.PHONY: all test preview run lint clean

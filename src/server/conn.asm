@@ -28,6 +28,11 @@
 %define C_JOB           192             ; PB_SIZE
 %define CONN_SIZE       512
 
+fits C_CIPHERS, PAIR_SIZE, C_JOB_NAME_LEN
+fits C_JOB_NAME, USERNAME_MAX, C_JOB_SALT
+fits C_JOB_SALT, 16, C_JOB
+fits C_JOB, PB_SIZE, CONN_SIZE
+
 %define ST_FREE         0
 %define ST_HTTP         1
 %define ST_HANDSHAKE    2
