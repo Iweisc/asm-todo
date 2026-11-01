@@ -1819,6 +1819,31 @@ draw_board:
     mov esi, [rsp + 12]
     call clamp_scroll
 
+    mov rax, [rsp]                          ; for drop_column
+    mov [board_area], rax
+    mov rax, [rsp + 8]
+    mov [board_area + 8], rax
+    mov eax, [rsp + 24]
+    mov [board_col_w], eax
+    mov qword [rsp + 32], 0                 ; the held card, while it's moving
+    mov dword [rsp + 28], -1                ; the column it would drop into
+    cmp byte [drag_moving], 0
+    je .columns
+    mov edi, [drag_id]
+    call find_view_issue
+    mov [rsp + 32], rax
+    test rax, rax
+    jz .columns
+    call drop_column
+    cmp eax, -1
+    je .columns
+    movzx ecx, byte [board_order + rax]
+    mov rdx, [rsp + 32]
+    cmp [rdx + CI_STATUS], cl
+    je .columns                             ; it's already in that column
+    mov [rsp + 28], eax
+
+.columns:
     xor r15d, r15d                          ; position in board_order
 .column:
     cmp r15d, STATUS_COUNT
@@ -1836,6 +1861,19 @@ draw_board:
     imul eax, r14d, VIEW_MAX * 8
     lea rbp, [col_items + rax]
     mov r13d, [col_count + r14 * 4]
+    cmp r15d, [rsp + 28]
+    jne .card
+    lea edi, [ebx - 4]                      ; the drop target, out into the gaps
+    mov esi, [rsp + 4]
+    add esi, GROUP_H + 4
+    mov edx, [rsp + 24]
+    add edx, 8
+    mov ecx, [rsp + 12]
+    sub ecx, GROUP_H + 12                   ; clear of the panel's rounded bottom
+    mov r8d, C_ACCENT
+    mov r9d, C_GROUP
+    mov r10d, 8
+    call outline_rrect
 .card:
     test r13d, r13d
     jz .header
@@ -1850,7 +1888,16 @@ draw_board:
     mov esi, r12d
     mov edx, [rsp + 24]
     mov rcx, [rbp]
+    cmp rcx, [rsp + 32]
+    je .held
     call draw_card
+    jmp .next_card
+.held:
+    mov ecx, CARD_H                         ; an empty slot where it was
+    mov r8d, C_LINE
+    mov r9d, C_PANEL
+    mov r10d, 8
+    call outline_rrect
 .next_card:
     add r12d, CARD_H + CARD_GAP
     add rbp, 8
@@ -1869,6 +1916,16 @@ draw_board:
 .done:
     mov rdi, [rsp + 16]
     call restore_clip
+    mov rcx, [rsp + 32]                     ; the held card follows the pointer, over the headers too
+    test rcx, rcx
+    jz .out
+    mov edi, [pointer_x]
+    sub edi, [drag_dx]
+    mov esi, [pointer_y]
+    sub esi, [drag_dy]
+    mov edx, [rsp + 24]
+    call draw_card
+.out:
     add rsp, 40
     pop r15
     pop r14
@@ -1876,6 +1933,34 @@ draw_board:
     pop r12
     pop rbp
     pop rbx
+    ret
+
+; -> eax = the board column under the pointer (index into board_order), or
+; -1 outside the board. Uses the last frame's layout.
+drop_column:
+    mov eax, [pointer_x]
+    sub eax, [board_area]
+    cmp eax, [board_area + 8]
+    jae .none
+    mov ecx, [pointer_y]
+    sub ecx, [board_area + 4]
+    cmp ecx, [board_area + 12]
+    jae .none
+    add eax, [board_x]
+    sub eax, 12
+    xor ecx, ecx
+    cmp eax, ecx
+    cmovl eax, ecx
+    xor edx, edx
+    mov ecx, [board_col_w]
+    add ecx, CARD_GAP
+    div ecx
+    mov ecx, STATUS_COUNT - 1
+    cmp eax, ecx
+    cmova eax, ecx
+    ret
+.none:
+    mov eax, -1
     ret
 
 ; Scrolls the board so the selected card shows. Only after keyboard moves,

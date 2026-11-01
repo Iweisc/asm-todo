@@ -242,7 +242,25 @@ ui_click:
     mov edi, [my_id]
     jmp sync_remove_member
 .issue:
-    jmp open_issue
+    cmp byte [board], 0
+    je open_issue
+    test edi, PENDING_ID
+    jnz .done                               ; not created yet, so it can't move or open
+    ; Board cards open on release instead, so they can be dragged first.
+    mov [drag_id], edi
+    mov [sel_id], edi
+    mov edi, [pointer_x]
+    mov esi, [pointer_y]
+    mov [drag_from_x], edi
+    mov [drag_from_y], esi
+    call hit_at
+    mov ecx, [pointer_x]
+    sub ecx, [rax + HIT_X]
+    mov [drag_dx], ecx
+    mov ecx, [pointer_y]
+    sub ecx, [rax + HIT_Y]
+    mov [drag_dy], ecx
+    ret
 .layout:
     mov [board], dil
     ret
@@ -288,6 +306,43 @@ ui_click:
     mov edi, MK_PRIORITY
     jmp open_menu
 .done:
+    ret
+
+; Drops a dragged card on the column under the pointer, or opens a card
+; that was only clicked.
+ui_release:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov ebx, [drag_id]
+    test ebx, ebx
+    jz .done
+    movzx r12d, byte [drag_moving]
+    call cancel_drag
+    mov edi, ebx
+    test r12d, r12d
+    jz .open
+    call drop_column
+    cmp eax, -1
+    je .done
+    movzx r12d, byte [board_order + rax]
+    mov edi, ebx
+    call find_view_issue
+    test rax, rax
+    jz .done                                ; deleted while it was held
+    cmp [rax + CI_STATUS], r12b
+    je .done
+    mov edi, ebx
+    mov esi, FIELD_STATUS
+    mov edx, r12d
+    call sync_set_field
+    jmp .done
+.open:
+    call open_issue
+.done:
+    add rsp, 8
+    pop r12
+    pop rbx
     ret
 
 ; edi = scroll amount in pixels, as reported by the compositor
@@ -739,6 +794,15 @@ ui_key:
     mov byte [need_redraw], 1
     mov byte [field_changed], 0
     mov dword [status_len], 0               ; any key dismisses the message, like a click
+    ; While a card is held, keys could open menus or switch layouts under it.
+    ; Only Esc does something: it puts the card back.
+    cmp dword [drag_id], 0
+    je .not_dragging
+    cmp ebx, KEY_ESC
+    jne .no_repeat
+    call cancel_drag
+    jmp .no_repeat
+.not_dragging:
     cmp byte [logged_in], 0
     je .field
     test dword [modifiers], MOD_CTRL

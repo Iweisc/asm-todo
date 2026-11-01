@@ -43,6 +43,9 @@
 %define CURSOR_DEFAULT  1
 %define CURSOR_POINTER  4
 %define CURSOR_TEXT     9
+%define CURSOR_GRABBING 17
+
+%define DRAG_SLOP       4               ; pixels a held card moves before it's dragged
 
 ; evdev key codes
 %define KEY_ESC         1
@@ -304,6 +307,15 @@ filter_project: resd 1                  ; a project number, or 0
 sel_id:         resd 1                  ; the selected issue, 0 for none
 scroll_y:       resd 1
 board_x:        resd 1
+board_area:     resd 4                  ; x, y, w, h of the board last frame
+board_col_w:    resd 1
+drag_id:        resd 1                  ; the board card held down, 0 for none
+drag_from_x:    resd 1                  ; where the button went down
+drag_from_y:    resd 1
+drag_dx:        resd 1                  ; where in the card it was grabbed
+drag_dy:        resd 1
+drag_moving:    resb 1                  ; it moved past DRAG_SLOP, so release drops it
+alignb 4
 detail_scroll:  resd 1
 content_h:      resd 1                  ; how tall the scrolled content was last frame
 
@@ -480,6 +492,8 @@ ui_team_opened:
     mov [scroll_y], eax
     mov [board_x], eax
     mov [sel_id], eax
+    mov [drag_id], eax
+    mov [drag_moving], al
     mov [filter_project], eax
     mov [view_mode], eax
     mov dword [filter_label], -1
@@ -536,19 +550,13 @@ add_hit:
 .full:
     ret
 
-; Recomputes what's under the pointer and updates hover state and cursor.
-update_hover:
-    xor r8d, r8d                            ; action
-    xor r9d, r9d                            ; arg
-    cmp byte [pointer_inside], 0
-    je .apply
+; edi = x, esi = y -> rax = the topmost hit region there, or 0
+hit_at:
     mov ecx, [hit_count]
-    mov edi, [pointer_x]
-    mov esi, [pointer_y]
 .find:
     ; Last drawn wins, like the pixels.
     test ecx, ecx
-    jz .apply
+    jz .none
     dec ecx
     imul eax, ecx, HIT_SIZE
     lea rax, [hits + rax]
@@ -562,6 +570,22 @@ update_hover:
     js .find
     cmp edx, [rax + HIT_H]
     jge .find
+    ret
+.none:
+    xor eax, eax
+    ret
+
+; Recomputes what's under the pointer and updates hover state and cursor.
+update_hover:
+    xor r8d, r8d                            ; action
+    xor r9d, r9d                            ; arg
+    cmp byte [pointer_inside], 0
+    je .apply
+    mov edi, [pointer_x]
+    mov esi, [pointer_y]
+    call hit_at
+    test rax, rax
+    jz .apply
     mov r8d, [rax + HIT_ACTION]
     mov r9d, [rax + HIT_ARG]
 .apply:
@@ -585,6 +609,9 @@ update_hover:
     mov eax, CURSOR_TEXT
     cmp r8d, A_FIELD
     cmove edi, eax
+    mov eax, CURSOR_GRABBING
+    cmp byte [drag_moving], 0
+    cmovne edi, eax
     cmp edi, [cursor_shape]
     je .done
     mov [cursor_shape], edi
@@ -1067,8 +1094,43 @@ pick_for_target:
 
 ; --- input ---
 
+; A held card starts moving once the pointer travels DRAG_SLOP, so a
+; click with a shaky hand still opens it.
 ui_pointer_moved:
+    cmp dword [drag_id], 0
+    je update_hover
+    cmp byte [pointer_inside], 0
+    je .cancel
+    cmp byte [drag_moving], 0
+    jne .moving
+    mov eax, [pointer_x]
+    sub eax, [drag_from_x]
+    mov ecx, eax
+    neg ecx
+    cmovs ecx, eax
+    cmp ecx, DRAG_SLOP
+    jge .start
+    mov eax, [pointer_y]
+    sub eax, [drag_from_y]
+    mov ecx, eax
+    neg ecx
+    cmovs ecx, eax
+    cmp ecx, DRAG_SLOP
+    jl update_hover
+.start:
+    mov byte [drag_moving], 1
+.moving:
+    mov byte [need_redraw], 1
     jmp update_hover
+.cancel:
+    call cancel_drag
+    jmp update_hover
+
+cancel_drag:
+    mov dword [drag_id], 0
+    mov byte [drag_moving], 0
+    mov byte [need_redraw], 1
+    ret
 
 ui_layout_changed:
     mov byte [need_redraw], 1

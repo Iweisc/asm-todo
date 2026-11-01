@@ -31,6 +31,8 @@ Sign up or log in, then create a team. Its identifier (like `ENG`) prefixes issu
 
 Issues have a status (Backlog, Todo, In Progress, Done, Canceled), a priority, an assignee, a project, up to 16 labels, a description and comments. The list groups them by status, and the board shows a column per status. The sidebar switches between all issues, active ones, the backlog, your own issues and a single project. The filter bar narrows any of these to one label or project.
 
+Drag a card on the board to another column to change its status. Esc while dragging puts it back.
+
 Clicking an issue opens it. Click its title or description to edit them, and use the properties on the right to change the rest. Comments show up live for everyone viewing the issue.
 
 Keys, when no text field has focus:
