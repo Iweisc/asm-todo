@@ -1,0 +1,7 @@
+build/
+todos.db
+issues.db
+issues.db.tmp
+issues.db.pub
+issues.db.log
+todos.db.pub
