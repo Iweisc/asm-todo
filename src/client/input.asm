@@ -4,6 +4,20 @@ section .rodata
 label_palette:  dd 0xeb5757, 0xf2994a, 0xf2c94c, 0x4cb782, 0x26b5ce, 0x4ea7fc, 0x5e6ad2, 0xbb87fc
 text st_no_slots,   "this team has used every label or project slot"
 
+; US layout, indexed by evdev key code. 0 means the key types nothing.
+keymap_plain:
+    db 0, 0, "1234567890-=", 0, 0
+    db "qwertyuiop[]", 0, 0
+    db "asdfghjkl;'`", 0, "\"
+    db "zxcvbnm,./", 0, "*", 0, " "
+    times 128 - ($ - keymap_plain) db 0
+keymap_shift:
+    db 0, 0, "!@#$%^&*()_+", 0, 0
+    db "QWERTYUIOP{}", 0, 0
+    db 'ASDFGHJKL:"~', 0, "|"
+    db "ZXCVBNM<>?", 0, "*", 0, " "
+    times 128 - ($ - keymap_shift) db 0
+
 section .bss
 field_changed:  resb 1
 
@@ -102,7 +116,13 @@ run_command:
     je .delete
     cmp ebx, CMD_FILTER
     je .filter
+    cmp ebx, CMD_CHAT
+    je .chat
     call clear_filters
+    jmp .done
+.chat:
+    xor edi, edi
+    call open_chat
     jmp .done
 .new_issue:
     call default_status
@@ -183,14 +203,14 @@ ui_click:
     mov dword [status_len], 0               ; clicking dismisses the message
     mov eax, [hover_action]
     mov edi, [hover_arg]
-    cmp eax, A_ROW_PRIORITY
+    cmp eax, A_CHAT
     ja .done
     jmp [.table + rax * 8]
 .table:
     dq .nothing, .done, .field, .login, .signup, .team, .view, .project
     dq .new_issue, open_team_modal, logout, .remove, .leave, .issue, .layout, .filter
     dq .unfilter, .pick, choose_item, .dismiss, submit_create, submit_team, close_detail, .delete
-    dq .row_status, .row_priority
+    dq .row_status, .row_priority, open_chat
 .nothing:
     ; Clicking empty space leaves whatever field was being edited.
     cmp dword [focus], F_PASS
@@ -352,6 +372,8 @@ ui_scroll:
     cmp byte [modal], M_NONE
     jne .done
     lea edi, [edi + edi * 2]
+    cmp byte [chat_open], 0
+    jne .chat
     cmp dword [detail_issue], 0
     jne .detail
     cmp byte [board], 0
@@ -362,6 +384,9 @@ ui_scroll:
     jmp .redraw
 .detail:
     add [detail_scroll], edi
+    jmp .redraw
+.chat:
+    sub [chat_scroll], edi                  ; it counts up from the bottom
     jmp .redraw
 .list:
     add [scroll_y], edi
@@ -545,6 +570,8 @@ field_command:
     je .unfocus
     cmp ebx, F_COMMENT
     je .comment
+    cmp ebx, F_MESSAGE
+    je .message
     test eax, MOD_CTRL                      ; descriptions: Ctrl+Enter finishes
     jz .newline
     cmp ebx, F_NEW_DESC
@@ -587,15 +614,18 @@ field_command:
     test eax, MOD_SHIFT
     jnz .newline
     mov edi, F_COMMENT
-    call field_trimmed
-    test edx, edx
-    jz .handled
-    mov edi, [detail_issue]
-    call sync_comment
-    test eax, eax
-    jz .handled
-    mov edi, F_COMMENT
-    call field_clear
+    mov esi, [detail_issue]
+    mov edx, OP_COMMENT
+    call send_field
+    jmp .handled
+.message:
+    test eax, MOD_SHIFT
+    jnz .newline
+    mov dword [chat_scroll], 0              ; back down to the newest
+    mov edi, F_MESSAGE
+    mov esi, [chat_peer]
+    mov edx, OP_MESSAGE
+    call send_field
     jmp .handled
 .esc:
     cmp ebx, F_PASS
@@ -650,6 +680,31 @@ field_command:
     xor eax, eax
 .done:
     add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
+; Sends a comment or message box's text and empties the box.
+; edi = field, esi = the issue or peer, edx = OP_COMMENT or OP_MESSAGE
+send_field:
+    push rbx
+    push r12
+    push r13
+    mov ebx, edi
+    mov r12d, esi
+    mov r13d, edx
+    call field_trimmed
+    test edx, edx
+    jz .done
+    mov edi, r12d
+    mov ecx, r13d
+    call sync_text
+    test eax, eax
+    jz .done
+    mov edi, ebx
+    call field_clear
+.done:
+    pop r13
     pop r12
     pop rbx
     ret
@@ -856,9 +911,28 @@ ui_key:
     mov eax, r12d
     jmp .out
 .shortcut:
+    cmp byte [chat_open], 0
+    jne .chat_key
     mov edi, ebx
     call shortcut
     jmp .out
+.chat_key:
+    ; Nothing's focused in a conversation: Esc leaves it, and anything else
+    ; goes to the message box.
+    cmp ebx, KEY_ESC
+    je .leave_chat
+    test dword [modifiers], MOD_CTRL
+    jnz .no_repeat
+    mov edi, F_MESSAGE
+    call set_focus
+    cmp ebx, KEY_ENTER
+    je .no_repeat
+    cmp ebx, KEY_KPENTER
+    je .no_repeat
+    jmp .field
+.leave_chat:
+    call close_detail
+    jmp .no_repeat
 .no_repeat:
     xor eax, eax
     jmp .out

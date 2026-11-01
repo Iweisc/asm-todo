@@ -15,6 +15,7 @@ text s_low,             "Low"
 text s_unknown_user,    "Unknown"
 text s_no_assignee,     "No assignee"
 text s_no_project,      "No project"
+text s_general,         "#general"
 text s_create_label,    "Create label: "
 text s_create_project,  "Create project: "
 text s_just_now,        "just now"
@@ -51,6 +52,7 @@ text c_all,             "Go to all issues"
 text c_active,          "Go to active issues"
 text c_backlog,         "Go to backlog"
 text c_mine,            "Go to my issues"
+text c_chat,            "Go to #general"
 text c_filter,          "Filter by label or project"
 text c_clear,           "Clear filters"
 text c_new_team,        "Create new team"
@@ -96,6 +98,7 @@ commands:
     COMMAND c_active, CMD_VIEW + V_ACTIVE, 0, WHEN_ALWAYS
     COMMAND c_backlog, CMD_VIEW + V_BACKLOG, 0, WHEN_ALWAYS
     COMMAND c_mine, CMD_VIEW + V_MINE, 0, WHEN_ALWAYS
+    COMMAND c_chat, CMD_CHAT, 0, WHEN_ALWAYS
     COMMAND c_filter, CMD_FILTER, 0, WHEN_ALWAYS
     COMMAND c_clear, CMD_CLEAR, 0, WHEN_FILTERED
     COMMAND c_new_team, CMD_NEW_TEAM, 0, WHEN_ALWAYS
@@ -135,6 +138,20 @@ user_name:
     lea rsi, [s_unknown_user]
     mov edx, s_unknown_user_len
     ret
+
+; rdi = cursor -> rdi advanced past the open conversation's name:
+; "#general" or the member's
+put_chat_name:
+    push rdi
+    lea rsi, [s_general]
+    mov edx, s_general_len
+    mov edi, [chat_peer]
+    test edi, edi
+    jz .put
+    call user_name
+.put:
+    pop rdi
+    jmp put_mem
 
 ; rdi = cursor, rsi = view issue -> rdi advanced past "ENG-12"
 put_issue_id:

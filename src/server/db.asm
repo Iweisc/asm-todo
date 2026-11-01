@@ -1,5 +1,5 @@
-; The server's state: users, teams, memberships, issues, comments and
-; sessions, held in fixed-size tables of slots.
+; The server's state: users, teams, memberships, issues, comments,
+; sessions, messages and seen marks, held in fixed-size tables of slots.
 ;
 ; On disk it's a snapshot plus a journal. Handlers mark the rows they change
 ; with db_touch, and db_commit appends those rows to <db>.log as one batch and
@@ -86,6 +86,22 @@
 %define SESS_SIZE       48
 %define SESSION_DAYS    30
 
+%define MS_ID           0               ; 0 marks a free slot
+%define MS_TEAM         4
+%define MS_FROM         8
+%define MS_TO           12              ; 0 for the team's channel
+%define MS_CREATED      16
+%define MS_LEN          20              ; u16
+%define MS_TEXT         22              ; MESSAGE_MAX bytes
+%define MS_SIZE         528
+
+; The newest message a member has seen in one of their conversations.
+%define SEEN_USER       0               ; 0 marks a free slot
+%define SEEN_TEAM       4
+%define SEEN_PEER       8               ; 0 for the team's channel
+%define SEEN_LAST       12
+%define SEEN_SIZE       16
+
 fits USER_NAME, USERNAME_MAX, USER_SALT
 fits USER_SALT, 16, USER_HASH
 fits USER_HASH, 32, USER_SIZE
@@ -99,6 +115,9 @@ fits ISS_TITLE, TITLE_MAX, ISS_DESC
 fits ISS_DESC, DESC_MAX, ISSUE_SIZE
 fits CMT_TEXT, COMMENT_MAX, CMT_SIZE
 fits SESS_HASH, 32, SESS_USER
+fits MS_LEN, 2, MS_TEXT
+fits MS_TEXT, MESSAGE_MAX, MS_SIZE
+fits SEEN_LAST, 4, SEEN_SIZE
 
 %define MAX_USERS       1024
 %define MAX_TEAMS       512
@@ -106,6 +125,8 @@ fits SESS_HASH, 32, SESS_USER
 %define MAX_ISSUES      16384
 %define MAX_COMMENTS    32768
 %define MAX_SESSIONS    4096
+%define MAX_MESSAGES    32768           ; when full, the oldest message makes room
+%define MAX_SEEN        32768
 
 %define T_USERS         0
 %define T_TEAMS         1
@@ -113,6 +134,8 @@ fits SESS_HASH, 32, SESS_USER
 %define T_ISSUES        3
 %define T_COMMENTS      4
 %define T_SESSIONS      5
+%define T_MESSAGES      6
+%define T_SEEN          7
 %define T_HEADER        0xff
 
 %define DB_MAGIC        0x33445441      ; "ATD3"
@@ -143,6 +166,8 @@ db_tables:
     dq issues,   n_issues,   ISSUE_SIZE, MAX_ISSUES
     dq comments, n_comments, CMT_SIZE,   MAX_COMMENTS
     dq sessions, n_sessions, SESS_SIZE,  MAX_SESSIONS
+    dq messages, n_messages, MS_SIZE,    MAX_MESSAGES
+    dq seen,     n_seen,     SEEN_SIZE,  MAX_SEEN
 TABLE_COUNT equ ($ - db_tables) / 32
 
 section .bss
@@ -174,7 +199,10 @@ n_members:          resd 1
 n_issues:           resd 1
 n_comments:         resd 1
 n_sessions:         resd 1
-                    resb HEADER_LOGGED - 52
+next_message_id:    resd 1                  ; these three came later, so older files hold zeros here
+n_messages:         resd 1
+n_seen:             resd 1
+                    resb HEADER_LOGGED - 64
 server_keys:                                ; private || public, the shape noise_server_respond wants
 server_priv:        resb 32                 ; last 32 bytes of the header
 server_pub:         resb 32                 ; derived at startup, never written
@@ -185,6 +213,8 @@ members:            resb MAX_MEMBERS * MEM_SIZE
 issues:             resb MAX_ISSUES * ISSUE_SIZE
 comments:           resb MAX_COMMENTS * CMT_SIZE
 sessions:           resb MAX_SESSIONS * SESS_SIZE
+messages:           resb MAX_MESSAGES * MS_SIZE
+seen:               resb MAX_SEEN * SEEN_SIZE
 jbuf:               resb JBUF_SIZE
 
 section .text
@@ -331,6 +361,9 @@ db_load:
     syscall
     call open_journal
     call replay_journal
+    cmp dword [next_message_id], 0
+    jne .compact
+    mov dword [next_message_id], 1          ; a database from before messages
     jmp .compact
 
 .fresh:
@@ -340,6 +373,7 @@ db_load:
     mov dword [next_team_id], 1
     mov dword [next_issue_id], 1
     mov dword [next_comment_id], 1
+    mov dword [next_message_id], 1
     lea rdi, [server_priv]
     mov esi, 32
     call random_bytes
@@ -737,8 +771,8 @@ write_pub_file:
     pop rbx
     ret
 
-; Finds a free slot, growing the table if there's none. Users, teams,
-; members, issues and comments all start with a field that's 0 when free.
+; Finds a free slot, growing the table if there's none. Every table but
+; sessions starts with a field that's 0 when free.
 ; edi = table -> rax = the zeroed row, or 0 if the table is full
 alloc_row:
     push rbx

@@ -14,6 +14,8 @@
 %define TITLE_MAX           120
 %define DESC_MAX            1500
 %define COMMENT_MAX         500
+%define MESSAGE_MAX         500
+%define CHAT_HISTORY        100                 ; a conversation opens with its newest messages
 %define LABEL_SLOTS         16                  ; per team, so an issue's labels fit a u16
 %define LABEL_NAME_MAX      24
 %define PROJECT_SLOTS       16                  ; per team, numbered 1-16, 0 is "no project"
@@ -51,6 +53,7 @@
 %define MSG_REMOVE_MEMBER   18                  ; u32 team, u32 user (yourself = leave)
 %define MSG_SUBSCRIBE       19                  ; u32 team
 %define MSG_OPEN_ISSUE      20                  ; u32 issue, 0 to close it
+%define MSG_OPEN_CHAT       21                  ; u32 peer: 0 for the team's channel, a member for a DM, -1 to close it
 %define MSG_OP              32                  ; u32 op number, u8 kind, u32 team, ...
 
 ; server -> client
@@ -65,12 +68,16 @@
 %define MSG_LOGGED_OUT      137
 %define MSG_TEAM_META       138                 ; u32 team, LABEL_SLOTS * label, PROJECT_SLOTS * project
 %define MSG_ISSUE_DETAIL    139                 ; u32 issue, str16 description, u8 n, n * comment
+%define MSG_CHAT            140                 ; u32 team, message
+%define MSG_CHAT_HISTORY    141                 ; u32 team, u32 peer, u8 n, n * message, oldest first
+%define MSG_UNREAD          142                 ; u32 team, u8 n, n * u32 peer with messages not seen yet
 
 ; An issue on the wire, without its description:
 ;   u32 id, u32 number, u8 status, u8 priority, u32 assignee, u8 project,
 ;   u16 labels, u32 creator, u32 created, u32 updated, str title
 ; A label or project: u32 color, str name. An empty name is an unused slot.
 ; A comment: u32 id, u32 author, u32 created, str16 text
+; A message: u32 id, u32 from, u32 to (0 for the team's channel), u32 created, str16 text
 ; Times are unix seconds.
 
 ; MSG_OP kinds and their extra fields
@@ -80,6 +87,7 @@
 %define OP_COMMENT          4                   ; u32 issue, str16 text
 %define OP_SET_LABEL        5                   ; u8 slot, u32 color, str name (empty deletes it)
 %define OP_SET_PROJECT      6                   ; u8 slot (1-16), u32 color, str name (empty deletes it)
+%define OP_MESSAGE          7                   ; u32 to (0 for the team's channel), str16 text
 
 ; OP_SET_FIELD fields and their values
 %define FIELD_STATUS        1                   ; u32

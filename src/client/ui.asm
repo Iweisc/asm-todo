@@ -1,11 +1,13 @@
 ; The window's state: fields, selection, the list and board, menus and
 ; modals. Keys and clicks are handled in input.asm, drawing lives in
-; widgets.asm (fields, menus, formatting) and views.asm (the screens).
+; widgets.asm (fields, menus, formatting), views.asm (the screens) and
+; chat.asm (conversations).
 ;
 ; Keyboard first: with no text field focused, letters are shortcuts.
 ;   c new issue    j/k or arrows move    Enter open    Esc back
 ;   s status   p priority   a assignee   l labels   m project
 ;   Ctrl+K command menu    Ctrl+B list or board
+; In a conversation, typing goes to the message box instead.
 
 %define SIDEBAR_W       232
 %define GAP             8               ; around the main panel
@@ -102,6 +104,7 @@
 %define F_TITLE         8               ; editing the open issue
 %define F_DESC          9
 %define F_COMMENT       10
+%define F_MESSAGE       11
 
 ; Clickable regions
 %define HIT_X           0
@@ -139,6 +142,7 @@
 %define A_DELETE        23
 %define A_ROW_STATUS    24              ; arg = issue id
 %define A_ROW_PRIORITY  25              ; arg = issue id
+%define A_CHAT          26              ; arg = peer, 0 for the team's channel
 
 ; Views of a team's issues
 %define V_ALL           0
@@ -186,6 +190,7 @@
 %define CMD_DELETE      (CMD_PICK + MK_FILTER)
 %define CMD_FILTER      (CMD_DELETE + 1)
 %define CMD_CLEAR       (CMD_FILTER + 1)
+%define CMD_CHAT        (CMD_CLEAR + 1)  ; the team's channel
 
 ; Rows of the list view
 %define RW_ISSUE        0               ; qword, 0 for a group header
@@ -211,20 +216,7 @@ text s_team_name_hint,  "Team name"
 text s_team_key_hint,   "KEY"
 text s_member_hint,     "Invite by username"
 text s_comment_hint,    "Leave a comment..."
-
-; US layout, indexed by evdev key code. 0 means the key types nothing.
-keymap_plain:
-    db 0, 0, "1234567890-=", 0, 0
-    db "qwertyuiop[]", 0, 0
-    db "asdfghjkl;'`", 0, "\"
-    db "zxcvbnm,./", 0, "*", 0, " "
-    times 128 - ($ - keymap_plain) db 0
-keymap_shift:
-    db 0, 0, "!@#$%^&*()_+", 0, 0
-    db "QWERTYUIOP{}", 0, 0
-    db 'ASDFGHJKL:"~', 0, "|"
-    db "ZXCVBNM<>?", 0, "*", 0, " "
-    times 128 - ($ - keymap_shift) db 0
+text s_message_hint,    "Write a message..."
 
 %macro FIELD 5                          ; buffer, max, flags, style, hint
     dq %1
@@ -246,6 +238,7 @@ fields:
     FIELD title_buf, TITLE_MAX, 0, ST_TITLE, s_title_hint
     FIELD desc_buf, DESC_MAX, FF_MULTILINE, ST_BODY, s_desc_hint
     FIELD comment_buf, COMMENT_MAX, FF_MULTILINE, ST_BODY, s_comment_hint
+    FIELD message_buf, MESSAGE_MAX, FF_MULTILINE, ST_BODY, s_message_hint
 
 focus:          dd F_USER
 filter_label:   dd -1                   ; a label slot, or -1
@@ -265,6 +258,7 @@ member_buf:     resb USERNAME_MAX
 title_buf:      resb TITLE_MAX
 desc_buf:       resb DESC_MAX
 comment_buf:    resb COMMENT_MAX
+message_buf:    resb MESSAGE_MAX
 mask_buf:       resb PASSWORD_MAX       ; a row of '*' for the password field
 alignb 8
 server_label:   resq 1                  ; "ip:port" for the status line
@@ -1001,6 +995,9 @@ selected_issue:
 
 ; -> eax = the issue shortcuts act on: the open one, else the selected one, or 0
 target_issue:
+    xor eax, eax
+    cmp byte [chat_open], 0
+    jne .done                               ; the list isn't showing
     mov eax, [detail_issue]
     test eax, eax
     jnz .done
@@ -1356,9 +1353,11 @@ open_issue:
     pop rbx
     ret
 
+; Back to the list, from the open issue or conversation.
 close_detail:
     mov edi, F_NONE
     call set_focus
+    call sync_close_chat
     xor edi, edi
     jmp sync_open_issue
 

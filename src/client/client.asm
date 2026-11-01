@@ -44,6 +44,7 @@ global _start
 %include "input.asm"
 %include "widgets.asm"
 %include "views.asm"
+%include "chat.asm"
 
 section .text
 

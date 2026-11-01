@@ -44,7 +44,6 @@ nocomment src/client/text.asm cov_strokes
 nocomment src/client/text.asm raster_cell
 nocomment src/client/text.asm ring_common
 nocomment src/client/ui.asm cancel_drag
-nocomment src/client/ui.asm close_detail
 nocomment src/client/ui.asm close_menu
 nocomment src/client/ui.asm open_team_modal
 nocomment src/client/ui.asm submit_create

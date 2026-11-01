@@ -26,12 +26,14 @@
 %define C_JOB_NAME      137
 %define C_JOB_SALT      176
 %define C_JOB           192             ; PB_SIZE
+%define C_CHAT          (C_JOB + PB_SIZE) ; the open conversation's peer, while F_CHAT is set
 %define CONN_SIZE       512
 
 fits C_CIPHERS, PAIR_SIZE, C_JOB_NAME_LEN
 fits C_JOB_NAME, USERNAME_MAX, C_JOB_SALT
 fits C_JOB_SALT, 16, C_JOB
-fits C_JOB, PB_SIZE, CONN_SIZE
+fits C_JOB, PB_SIZE, C_CHAT
+fits C_CHAT, 4, CONN_SIZE
 
 %define ST_FREE         0
 %define ST_HTTP         1
@@ -42,6 +44,7 @@ fits C_JOB, PB_SIZE, CONN_SIZE
 %define F_KILL          1
 %define F_WANT_OUT      2
 %define F_BUSY          4               ; waiting on a password job, input is held back
+%define F_CHAT          8               ; a conversation is open, C_CHAT says which
 
 %define MAX_CONN        256
 %define MAX_CONN_PER_IP 16
