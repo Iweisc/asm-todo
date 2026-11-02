@@ -421,8 +421,10 @@ on_auth_ok:
     mov dword [team_count], 0
     mov dword [current_team], 0
     call clear_team_view
+    call ui_logged_in
     jmp .done
 .resumed:
+    ; A reconnect leaves whatever was open and focused alone.
     ; Ops the server applied before the old connection died: their ACKs got lost.
     cmp dword [pending_count], 0
     je .done
@@ -438,7 +440,6 @@ on_auth_ok:
     call session_save
     mov byte [resync], 1
     mov dword [auth_msg_len], 0
-    call ui_logged_in
     pop rbx
     ret
 .bad:

@@ -1,12 +1,19 @@
 ; ui-test's checks of the right click menu, the filter menu's groups, where a
-; drop goes, and the send button. ui_test.asm includes this at its end,
-; having no room left of its own.
+; drop goes, the send button, and reconnecting. ui_test.asm includes this at
+; its end, having no room left of its own.
 
 section .rodata
 n_right_click:  db "a right click on an issue opens just its actions, at the pointer", 0
 n_filter_groups: db "filter items say whether they're a priority or a person", 0
 n_drop_field:   db "a drop goes to the open conversation's box, or else the open issue's", 0
 n_send_button:  db "the send button sends what's in the message box", 0
+n_resume_focus: db "a reconnect leaves the message box focused", 0
+; MSG_AUTH_OK past the type byte: lewis, a zero token, no ops applied.
+t_auth_resume:  dd 1
+                db 5, "lewis"
+                times 32 db 0
+                dd 0
+t_auth_resume_len equ $ - t_auth_resume
 
 section .text
 
@@ -119,6 +126,28 @@ controls_tests:
     mov esi, ebx
     lea rdi, [n_send_button]
     call check
+    call resume_tests
     call close_detail
     pop rbx
+    ret
+
+; The session resuming after a dropped connection, with the message box focused.
+resume_tests:
+    sub rsp, 8
+    mov edi, F_MESSAGE
+    call set_focus
+    lea rdi, [t_auth_resume]
+    mov esi, t_auth_resume_len
+    call rd_begin
+    call on_auth_ok
+    call rd_ok
+    xor esi, esi
+    test eax, eax
+    jz .done
+    cmp dword [focus], F_MESSAGE
+    sete sil
+.done:
+    lea rdi, [n_resume_focus]
+    call check
+    add rsp, 8
     ret
