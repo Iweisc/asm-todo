@@ -557,6 +557,7 @@ draw_comment:
     lea edx, [r14d + 28]
     lea ecx, [r12d + 24]
     lea r8d, [r15d - 28]
+    mov byte [wrap_mentions], 1
     call draw_wrapped
 .image:
     mov [rsp], eax                          ; the text's height

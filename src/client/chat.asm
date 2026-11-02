@@ -181,6 +181,7 @@ lay_message:
     mov eax, INK(C_DIM, ST_BODY)            ; not on the server yet
     cmp byte [rbx + CH_PENDING], 0
     cmovne r9d, eax
+    mov byte [wrap_mentions], 1
     call draw_wrapped
 .text_done:
     mov [rsp + 8], eax

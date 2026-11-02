@@ -15,6 +15,7 @@ alignb 8
 history:        resq CHAT_HISTORY           ; rows h_open_chat sends, oldest first
 unread_peer:    resd UNREAD_MAX
 unread_newest:  resd UNREAD_MAX
+unread_mention: resd UNREAD_MAX         ; the newest message mentioning them, then whether it is unseen
 
 section .rodata
 text e_no_message,      "that message is gone"
@@ -436,28 +437,34 @@ h_open_chat:
     pop rbx
     ret
 
-; Tells a connection which of its user's conversations in a team have
-; messages from others they haven't seen. Only channels that still exist and
-; current members count, since those are the conversations a client can open.
-; edi = connection index, esi = team, edx = user
-send_unread:
+; The newest message from someone else in each of a user's conversations in
+; a team, in unread_peer and unread_newest, and in unread_mention the newest
+; in a channel that mentions them. edi = team, esi = user -> eax = conversations
+gather_unread:
     push rbx
     push rbp
     push r12
     push r13
     push r14
     push r15
-    sub rsp, 8
-    mov [rsp], edi
-    mov r12d, esi
-    mov r13d, edx
-    ; The newest message from someone else in each conversation.
+    sub rsp, 24
+    mov r12d, edi
+    mov r13d, esi
+    mov edi, esi
+    call find_user
+    xor r15d, r15d                          ; their name's length
+    test rax, rax
+    jz .named
+    movzx r15d, byte [rax + USER_NAME_LEN]
+    lea rax, [rax + USER_NAME]
+.named:
+    mov [rsp], rax
     xor ebp, ebp                            ; conversations found
     lea rbx, [messages]
     mov r14d, [n_messages]
 .message:
     test r14d, r14d
-    jz .check
+    jz .done
     cmp [rbx + MS_TEAM], r12d
     jne .next
     cmp [rbx + MS_FROM], r13d
@@ -480,18 +487,68 @@ send_unread:
     jae .next
     mov [unread_peer + rcx * 4], eax
     mov dword [unread_newest + rcx * 4], 0
+    mov dword [unread_mention + rcx * 4], 0
     inc ebp
 .newest:
     mov edx, [rbx + MS_ID]
     cmp edx, [unread_newest + rcx * 4]
-    jbe .next
+    jbe .mention
     mov [unread_newest + rcx * 4], edx
+.mention:
+    ; Only in channels. Everything in a direct message is for them anyway.
+    test eax, eax
+    jg .next
+    test r15d, r15d
+    jz .next
+    cmp edx, [unread_mention + rcx * 4]
+    jbe .next
+    mov [rsp + 8], ecx
+    lea rdi, [rbx + MS_TEXT]
+    movzx esi, word [rbx + MS_LEN]
+    mov rdx, [rsp]
+    mov ecx, r15d
+    call text_mentions
+    test eax, eax
+    jz .next
+    mov ecx, [rsp + 8]
+    mov edx, [rbx + MS_ID]
+    mov [unread_mention + rcx * 4], edx
 .next:
     add rbx, MS_SIZE
     dec r14d
     jmp .message
+.done:
+    mov eax, ebp
+    add rsp, 24
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
 
-.check:
+; Tells a connection which of its user's conversations in a team have
+; messages from others they haven't seen, and which of those channels
+; mention them in one. Only channels that still exist and current members
+; count, since those are the conversations a client can open.
+; edi = connection index, esi = team, edx = user
+send_unread:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 8
+    mov [rsp], edi
+    mov r12d, esi
+    mov r13d, edx
+    mov edi, esi
+    mov esi, edx
+    call gather_unread
+    mov ebp, eax
+
     lea rdi, [msg_buf]
     mov esi, MSG_UNREAD
     call wr_u8
@@ -503,7 +560,7 @@ send_unread:
     xor r14d, r14d
 .conversation:
     cmp r14d, ebp
-    jae .send
+    jae .mentions
     mov esi, [unread_peer + r14 * 4]
     test esi, esi
     jz .seen_yet
@@ -511,31 +568,57 @@ send_unread:
     mov edi, r12d
     call find_member
     test rax, rax
-    jz .next_conversation
+    jz .gone
     jmp .seen_yet
 .channel:
     mov edi, r12d
     call find_channel_peer
     test rax, rax
-    jz .next_conversation
+    jz .gone
 .seen_yet:
     mov edi, r13d
     mov esi, r12d
     mov edx, [unread_peer + r14 * 4]
     call find_seen
+    xor ecx, ecx
     test rax, rax
-    jz .unread
-    mov ecx, [unread_newest + r14 * 4]
-    cmp ecx, [rax + SEEN_LAST]
+    jz .seen_up_to
+    mov ecx, [rax + SEEN_LAST]
+.seen_up_to:
+    ; A mention counts while it's unseen. From here unread_mention says whether it is.
+    xor eax, eax
+    cmp [unread_mention + r14 * 4], ecx
+    seta al
+    mov [unread_mention + r14 * 4], eax
+    cmp [unread_newest + r14 * 4], ecx
     jbe .next_conversation
-.unread:
     mov eax, [unread_peer + r14 * 4]
     mov [rbx], eax
     add rbx, 4
     inc byte [r15]
+    jmp .next_conversation
+.gone:
+    mov dword [unread_mention + r14 * 4], 0
 .next_conversation:
     inc r14d
     jmp .conversation
+.mentions:
+    mov r15, rbx                            ; their count goes here
+    mov byte [r15], 0
+    inc rbx
+    xor r14d, r14d
+.mention:
+    cmp r14d, ebp
+    jae .send
+    cmp dword [unread_mention + r14 * 4], 0
+    je .next_mention
+    mov eax, [unread_peer + r14 * 4]
+    mov [rbx], eax
+    add rbx, 4
+    inc byte [r15]
+.next_mention:
+    inc r14d
+    jmp .mention
 .send:
     lea rsi, [msg_buf]
     mov rdx, rbx

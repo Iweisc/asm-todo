@@ -60,7 +60,7 @@ side_row:
     ret
 
 ; A sidebar row that opens a conversation: current while it's open, with a
-; dot when it has messages we haven't seen.
+; dot when it has messages we haven't seen, or an "@" when one mentions us.
 ; edi = y, esi = peer, edx = the dot's x -> eax = the row's background, ecx = 1 if unread
 chat_side_row:
     push rbx
@@ -88,11 +88,21 @@ chat_side_row:
     xor ecx, ecx
     cmp eax, -1
     je .done
+    mov edi, r12d
+    call is_mentioned
+    test eax, eax
+    jz .dot
+    mov edi, r13d
+    mov esi, ebx
+    call draw_mention_badge
+    jmp .unread
+.dot:
     lea edi, [r13d * 4]
     lea esi, [ebx * 4 + 56]
     mov edx, 12
     mov ecx, C_ACCENT_HI
     call aa_disc
+.unread:
     mov ecx, 1
 .done:
     mov eax, r14d

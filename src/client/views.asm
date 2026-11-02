@@ -1897,6 +1897,7 @@ draw_description:
     mov ecx, r12d
     mov r8d, r15d
     mov r9d, INK(C_TEXT, ST_BODY)
+    mov byte [wrap_mentions], 1
     call draw_wrapped
     jmp .hit
 .empty:
@@ -2593,6 +2594,7 @@ draw_frame:
 .login:
     call draw_login
 .overlays:
+    call draw_mentions
     call draw_toast
     cmp byte [menu_open], 0
     je .pump
