@@ -43,9 +43,11 @@ open_chat:
     pop rbx
     ret
 
-; The member list changed. A conversation with someone who left closes.
+; The member list changed. A conversation with someone who left closes,
+; and so does the settings page of someone we can't moderate anymore.
 ui_members_changed:
     call clear_joined_invite
+    call settings_members_changed
     cmp byte [chat_open], 0
     je .done
     mov edi, [chat_peer]
@@ -316,9 +318,72 @@ draw_chat_intro:
     pop rbx
     ret
 
+; The box for the next message, or a line saying we can't send any here,
+; and under the box a note while slowmode holds us to it.
+; edi = x, esi = w, edx = bottom -> eax = the top of what it drew
+draw_composer:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    sub rsp, 16
+    mov ebx, edi
+    mov r12d, esi
+    mov r13d, edx
+    mov edi, [chat_peer]
+    call chan_access
+    mov ebp, eax
+    mov [rsp], edx                          ; slowmode
+    test ebp, CH_SEND
+    jz .cant
+    mov edi, ebx
+    mov esi, r12d
+    mov edx, r13d
+    call draw_message_box
+    mov r14d, eax
+    test ebp, CH_MANAGE
+    jnz .done                               ; slowmode doesn't hold them
+    cmp dword [rsp], 0
+    je .done
+    lea rdi, [scratch]
+    lea rsi, [s_slowmode_on]
+    mov edx, s_slowmode_on_len
+    call put_mem
+    mov esi, [rsp]
+    call put_u32
+    lea rsi, [s_seconds]
+    mov edx, s_seconds_len
+    call put_mem
+    lea rdx, [scratch]
+    mov rcx, rdi
+    sub rcx, rdx
+    lea edi, [ebx + r12d]
+    lea esi, [r13d - 12]
+    mov r8d, C_FAINT
+    call draw_link
+    jmp .done
+.cant:
+    mov edi, ebx
+    lea esi, [r13d - 30]
+    lea rdx, [s_cant_send]
+    mov ecx, s_cant_send_len
+    mov r8d, INK(C_DIM, ST_BODY)
+    call draw_text
+    lea r14d, [r13d - 56]
+.done:
+    mov eax, r14d
+    add rsp, 16
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+
 ; The box for the next message, which grows upwards with what's typed.
 ; edi = x, esi = w, edx = bottom -> eax = the box's top
-draw_composer:
+draw_message_box:
     push rbx
     push rbp
     push r12

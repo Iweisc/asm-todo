@@ -133,6 +133,11 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define F_NEW_PASS      15
 %define F_TEAM_RENAME   16              ; the team's name in its settings
 %define F_CHANNEL       17              ; a channel's name
+%define F_REASON        18              ; why a member is kicked, banned or timed out
+%define F_SEARCH        19              ; filters the team settings' member list
+%define F_NICK          20              ; a member's nickname, on their page
+%define F_ROLE_NAME     21              ; the role being edited
+%define F_AUTOMOD       22              ; the team's blocked words, one per line
 
 ; Clickable regions
 %define HIT_X           0
@@ -180,9 +185,10 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define A_CHANGE_PASSWORD 33
 %define A_SETTINGS      34              ; arg = the field to focus, F_NONE for none
 %define A_INVITE        35
-%define A_SET_ROLE      36              ; arg = user id, switches them between owner and member
+%define A_SET_ROLE      36              ; arg = ROLE_*, for the member being managed
 %define A_SAVE_TEAM_NAME 37
-%define A_CHANNEL_DIALOG 38             ; arg = the channel's slot, 0 for a new one
+%define A_CHANNEL_DIALOG 38             ; arg = the channel's slot, 0 for #general, CHAN_NEW for a new one
+%define CHAN_NEW        255
 %define A_SAVE_CHANNEL  39
 %define A_DELETE_CHANNEL 40
 %define A_MESSAGE       41              ; arg = message id, shows its actions on hover. draw_actions wants Edit and Delete next
@@ -193,6 +199,26 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define A_ATTACH_PICK   46              ; arg = the field to attach a file to
 %define A_SEND          47              ; arg = the field to send
 %define A_MENTION       48              ; arg = a row of the mention list
+%define A_TAB           49              ; arg = TAB_*, in team settings
+%define A_MANAGE        50              ; arg = user id, or 0 back to the member list
+%define A_TIMEOUT       51              ; arg = seconds, 0 to end it, for the member being managed
+%define A_KICK          52              ; the member being managed
+%define A_BAN           53              ; the member being managed
+%define A_UNBAN         54              ; arg = user id
+%define A_TOGGLE_ROLE   55              ; arg = role slot, for the member being managed
+%define A_SAVE_NICK     56              ; the member being managed
+%define A_BAN_HISTORY   57              ; arg = seconds of their messages a ban deletes
+%define A_EDIT_ROLE     58              ; arg = role slot, or -1 back to the list
+%define A_ROLE_COLOR    59              ; arg = color, for the role being edited
+%define A_ROLE_PERM     60              ; arg = PERM_* bit number, for the role being edited
+%define A_MOVE_ROLE     61              ; arg = 1 up, 0 down
+%define A_SAVE_ROLE     62
+%define A_DELETE_ROLE   63
+%define A_AUTOMOD_TIMEOUT 64            ; arg = seconds
+%define A_SAVE_AUTOMOD  65
+%define A_SLOWMODE      66              ; arg = seconds, in the channel dialog
+%define A_OVERRIDE      67              ; arg = role slot * 4 + CH_* bit number, in the channel dialog
+%define A_NEW_ROLE      68              ; the roles tab's Create role
 %define BOX_BUTTONS_W   76              ; what a box's text leaves clear for them
 
 ; Views of a team's issues
@@ -343,6 +369,11 @@ fields:
     FIELD new_pass_buf, PASSWORD_MAX, FF_MASKED, ST_BODY, s_password
     FIELD team_rename_buf, TEAMNAME_MAX, 0, ST_BODY, s_team_name_hint
     FIELD channel_buf, CHANNEL_NAME_MAX, 0, ST_BODY, s_channel_field_hint
+    FIELD reason_buf, REASON_MAX, 0, ST_BODY, s_reason_hint
+    FIELD search_buf, USERNAME_MAX, 0, ST_BODY, s_search_hint
+    FIELD nick_buf, NICKNAME_MAX, 0, ST_BODY, s_nick_hint
+    FIELD role_name_buf, ROLE_NAME_MAX, 0, ST_BODY, s_role_name_hint
+    FIELD automod_buf, AUTOMOD_MAX, FF_MULTILINE, ST_BODY, s_automod_hint
 
 focus:          dd F_USER
 filter_label:   dd -1                   ; a label slot, or -1

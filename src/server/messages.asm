@@ -16,11 +16,13 @@ history:        resq CHAT_HISTORY           ; rows h_open_chat sends, oldest fir
 unread_peer:    resd UNREAD_MAX
 unread_newest:  resd UNREAD_MAX
 unread_mention: resd UNREAD_MAX         ; the newest message mentioning them, then whether it is unseen
+deleted_heads:  resb MAX_MESSAGES * 16      ; the first 16 bytes of the messages a ban deleted
 
 section .rodata
 text e_no_message,      "that message is gone"
 text e_message_rights,  "that's someone else's message"
 text e_message_text,    "messages are 1-500 characters"
+text e_blocked,         "AutoMod blocked that, it has a word this team doesn't allow"
 
 section .text
 
@@ -65,25 +67,45 @@ message_peer:
     mov eax, -1
     ret
 
-; Whether a connection gets a message.
+; Whether a connection gets a message, which in a channel takes seeing it.
 ; edi = connection index, rsi = message row
 ; -> eax = the peer it's in for that connection, or -1, rdx = the connection
 message_target:
-    push rsi
+    push rbx
+    push r12
+    push r13
+    mov r12, rsi
     call conn_addr
-    pop rdi
-    mov rdx, rax
+    mov rbx, rax
     mov eax, -1
-    cmp byte [rdx + C_STATE], ST_OPEN
+    cmp byte [rbx + C_STATE], ST_OPEN
     jne .done
-    mov esi, [rdx + C_USER]
+    mov esi, [rbx + C_USER]
     test esi, esi
     jz .done
-    mov ecx, [rdx + C_TEAM]
-    cmp ecx, [rdi + MS_TEAM]
+    mov ecx, [rbx + C_TEAM]
+    cmp ecx, [r12 + MS_TEAM]
     jne .done
-    jmp message_peer
+    mov rdi, r12
+    call message_peer
+    cmp eax, -1
+    je .done
+    test eax, eax
+    jg .done                                ; a direct message
+    mov r13d, eax
+    mov edi, [r12 + MS_TEAM]
+    mov esi, eax
+    mov edx, [rbx + C_USER]
+    call peer_visible
+    test eax, eax
+    mov eax, -1
+    jz .done
+    mov eax, r13d
 .done:
+    mov rdx, rbx
+    pop r13
+    pop r12
+    pop rbx
     ret
 
 ; edi = user, esi = team, edx = peer -> rax = their seen row, or 0
@@ -203,9 +225,9 @@ evict_oldest_message:
     pop rbx
     ret
 
-; Sends a message to the team's channel or to one member, and to everyone
-; who may read it. A message arriving in a conversation someone has open
-; counts as seen by them.
+; Sends a message to one of the team's channels or to one member, and to
+; everyone who may read it. A message arriving in a conversation someone has
+; open counts as seen by them. channel_post has the rules for channels.
 op_message:
     push rbx
     push rbp
@@ -223,7 +245,7 @@ op_message:
     jz .invalid
     mov r14, rdx                            ; its image
     test r13d, r13d
-    jz .store
+    jz .post
     js .channel
     mov edi, r12d
     mov esi, r13d
@@ -237,6 +259,12 @@ op_message:
     call find_channel_peer
     test rax, rax
     jz .invalid
+.post:
+    mov edi, r12d
+    mov esi, r13d
+    call channel_post
+    test eax, eax
+    jnz .done
 .store:
     mov edi, T_MESSAGES
     call alloc_row
@@ -345,6 +373,12 @@ h_open_chat:
     ; Slots get reused, so table order isn't age order. Keep the newest
     ; CHAT_HISTORY in history, sorted by id as they're found.
     xor ebp, ebp                            ; rows kept
+    mov edi, r13d
+    mov esi, r12d
+    mov edx, r14d
+    call peer_visible
+    test eax, eax
+    jz .reply                               ; a channel they can't see is empty to them
     lea r15, [messages]
     mov ecx, [n_messages]
 .scan:
@@ -530,8 +564,8 @@ gather_unread:
 
 ; Tells a connection which of its user's conversations in a team have
 ; messages from others they haven't seen, and which of those channels
-; mention them in one. Only channels that still exist and current members
-; count, since those are the conversations a client can open.
+; mention them in one. Only channels that still exist and they can see, and
+; current members count, since those are the conversations a client can open.
 ; edi = connection index, esi = team, edx = user
 send_unread:
     push rbx
@@ -563,8 +597,7 @@ send_unread:
     jae .mentions
     mov esi, [unread_peer + r14 * 4]
     test esi, esi
-    jz .seen_yet
-    js .channel
+    jle .channel
     mov edi, r12d
     call find_member
     test rax, rax
@@ -572,8 +605,9 @@ send_unread:
     jmp .seen_yet
 .channel:
     mov edi, r12d
-    call find_channel_peer
-    test rax, rax
+    mov edx, r13d
+    call peer_visible
+    test eax, eax
     jz .gone
 .seen_yet:
     mov edi, r13d
@@ -689,20 +723,18 @@ find_message:
 .done:
     ret
 
-; Checks cur is still in the team and the message is there. edi = team, esi = message
-; -> rax = the message's row and edx = cur's role, or rax = 0 when the error has been sent
+; Checks cur is still in the team, not timed out, and the message is there. edi = team, esi = message
+; -> rax = the message's row and rdx = cur's member row, or rax = 0 when the error has been sent
 editable_message:
     push rbx
     push r12
     sub rsp, 8
     mov ebx, edi
     mov r12d, esi
-    mov rax, [cur]
-    mov esi, [rax + C_USER]
-    call find_member
+    call writable_member
     test rax, rax
-    jz .not_member
-    mov edx, [rax + MEM_ROLE]
+    jz .done
+    mov rdx, rax
     push rdx
     push rdx
     mov edi, ebx
@@ -713,10 +745,6 @@ editable_message:
     test rax, rax
     jz .gone
     jmp .done
-.not_member:
-    lea rsi, [e_not_member]
-    mov edx, e_not_member_len
-    jmp .error
 .gone:
     lea rsi, [e_no_message]
     mov edx, e_no_message_len
@@ -765,6 +793,16 @@ h_edit_message:
     call valid_body
     test eax, eax
     jz .bad_text
+    cmp dword [rbx + MS_TO], 0
+    jg .checked                             ; AutoMod leaves direct messages alone
+    mov edi, r12d
+    mov esi, [rbx + MS_TO]
+    mov rdx, r13
+    mov ecx, r14d
+    call automod_check
+    test eax, eax
+    jnz .blocked
+.checked:
     lea rdi, [rbx + MS_TEXT]                ; the old text goes, not just its length
     mov esi, MESSAGE_MAX
     call wipe
@@ -801,6 +839,10 @@ h_edit_message:
 .bad_text:
     lea rsi, [e_message_text]
     mov edx, e_message_text_len
+    jmp .error
+.blocked:
+    lea rsi, [e_blocked]
+    mov edx, e_blocked_len
 .error:
     call send_error
 .done:
@@ -811,8 +853,9 @@ h_edit_message:
     pop rbx
     ret
 
-; MSG_DELETE_MESSAGE: its author deletes a message, or an owner one in a
-; channel. Owners can't read others' direct messages, so not those.
+; MSG_DELETE_MESSAGE: its author deletes a message, or someone with
+; CH_MANAGE one in that channel, which goes in the audit log. Nobody else
+; reads others' direct messages, so not those.
 h_delete_message:
     push rbx
     push r12
@@ -830,15 +873,27 @@ h_delete_message:
     test rax, rax
     jz .done
     mov rbx, rax
+    mov byte [rsp + 16], 0                  ; 1 when it's someone else's
     mov rax, [cur]
     mov eax, [rax + C_USER]
     cmp [rbx + MS_FROM], eax
     je .allowed
-    cmp edx, ROLE_OWNER
-    jne .rights
-    cmp dword [rbx + MS_TO], 0
-    je .allowed                             ; #general
-    jns .rights                             ; a direct message
+    mov esi, [rbx + MS_TO]
+    test esi, esi
+    jg .rights                              ; a direct message
+    and esi, ~CHANNEL_PEER
+    mov edi, r12d
+    call channel_access
+    test eax, CH_MANAGE
+    jz .rights
+    mov byte [rsp + 16], 1
+    mov edi, r12d
+    mov esi, AU_DELETE_MESSAGE
+    mov edx, [rbx + MS_FROM]
+    xor ecx, ecx
+    xor r8d, r8d
+    xor r9d, r9d
+    call audit_add
 .allowed:
     mov rax, [rbx]
     mov [rsp], rax
@@ -860,6 +915,11 @@ h_delete_message:
     sub rdx, rsi
     mov rdi, rsp
     call send_to_readers
+    cmp byte [rsp + 16], 0
+    je .done
+    mov edi, r12d
+    mov esi, -1
+    call send_moderation
     jmp .done
 .violation:
     call kill_cur
@@ -870,6 +930,101 @@ h_delete_message:
     call send_error
 .done:
     add rsp, 24
+    pop r12
+    pop rbx
+    ret
+
+; Deletes a user's channel messages in a team from the last seconds. The rows
+; are touched, not committed, and their heads kept for announce_deleted.
+; edi = team, esi = user, edx = seconds -> eax = how many
+delete_recent_messages:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 8
+    mov r12d, edi
+    mov r13d, esi
+    mov r15d, edx
+    xor ebp, ebp
+    test edx, edx
+    jz .done
+    call now_unix
+    sub eax, r15d
+    mov r15d, eax                           ; the oldest that goes
+    lea rbx, [messages]
+    mov r14d, [n_messages]
+.row:
+    test r14d, r14d
+    jz .done
+    cmp [rbx + MS_TEAM], r12d
+    jne .next
+    cmp [rbx + MS_FROM], r13d
+    jne .next
+    cmp dword [rbx + MS_TO], 0
+    jg .next                                ; a direct message
+    cmp [rbx + MS_CREATED], r15d
+    jb .next
+    mov eax, ebp
+    shl eax, 4
+    mov rcx, [rbx]
+    mov [deleted_heads + rax], rcx
+    mov rcx, [rbx + 8]
+    mov [deleted_heads + rax + 8], rcx
+    inc ebp
+    mov edi, T_MESSAGES
+    mov rsi, rbx
+    call free_row
+.next:
+    add rbx, MS_SIZE
+    dec r14d
+    jmp .row
+.done:
+    mov eax, ebp
+    add rsp, 8
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+
+; Tells whoever could read the messages delete_recent_messages kept the
+; heads of that they're gone. edi = how many
+announce_deleted:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov r12d, edi
+    xor ebx, ebx
+.head:
+    cmp ebx, r12d
+    jae .done
+    lea rdi, [msg_buf]
+    mov esi, MSG_CHAT_DELETED
+    call wr_u8
+    mov eax, ebx
+    shl eax, 4
+    mov esi, [deleted_heads + rax + MS_TEAM]
+    call wr_u32
+    mov eax, ebx
+    shl eax, 4
+    mov esi, [deleted_heads + rax + MS_ID]
+    call wr_u32
+    lea rsi, [msg_buf]
+    mov rdx, rdi
+    sub rdx, rsi
+    mov eax, ebx
+    shl eax, 4
+    lea rdi, [deleted_heads + rax]
+    call send_to_readers
+    inc ebx
+    jmp .head
+.done:
+    add rsp, 8
     pop r12
     pop rbx
     ret

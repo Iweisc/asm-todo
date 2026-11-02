@@ -286,19 +286,16 @@ comment_rights:
     je .done                                ; not on the server yet
     mov ecx, [my_id]
     cmp [rdi + CC_AUTHOR], ecx
-    jne .owner
+    jne .staff
     mov eax, 1
     mov edx, 1
     ret
-.owner:
-    push rdx
-    call current_team_row
-    pop rdx
-    test rax, rax
-    jz .done
-    cmp byte [rax + CO_ROLE], ROLE_OWNER
-    sete al
-    movzx eax, al
+.staff:
+    sub rsp, 8
+    mov edi, PERM_MANAGE_MESSAGES
+    call has_perm
+    xor edx, edx
+    add rsp, 8
 .done:
     ret
 

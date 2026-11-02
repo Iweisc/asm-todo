@@ -157,7 +157,7 @@ run_command:
     call open_team_settings
     jmp .done
 .new_channel:
-    xor edi, edi
+    mov edi, CHAN_NEW
     call open_channel_dialog
     jmp .done
 .new_issue:
@@ -289,6 +289,12 @@ disarm_others:
     je .channel
     cmp edi, A_LEAVE
     je .channel
+    cmp edi, A_KICK
+    je .channel
+    cmp edi, A_BAN
+    je .channel
+    cmp edi, A_BAN_HISTORY
+    je .channel
     mov [member_armed], eax
 .channel:
     cmp edi, A_DELETE_CHANNEL
@@ -296,8 +302,12 @@ disarm_others:
     mov [chan_armed], al
 .message:
     cmp edi, A_DELETE_MESSAGE
-    je .done
+    je .role
     mov [message_armed], eax
+.role:
+    cmp edi, A_DELETE_ROLE
+    je .done
+    mov [role_armed], al
 .done:
     ret
 
@@ -310,7 +320,7 @@ ui_click:
     call disarm_others
     mov eax, [hover_action]
     mov edi, [hover_arg]
-    cmp eax, A_MENTION
+    cmp eax, A_NEW_ROLE
     ja .done
     jmp [.table + rax * 8]
 .table:
@@ -323,6 +333,10 @@ ui_click:
     dq open_channel_dialog, submit_channel, click_delete_channel
     dq .nothing, start_message_edit, click_delete_message, open_image_view, attach_drop
     dq pick_image, click_send, pick_mention
+    dq click_tab, click_manage, click_timeout, click_kick, click_ban, click_unban
+    dq click_toggle_role, save_nickname, click_ban_history, click_edit_role, click_role_color
+    dq click_role_perm, click_move_role, save_role, click_delete_role, click_automod_timeout
+    dq save_automod, click_slowmode, click_override, click_new_role
 .nothing:
     ; Clicking empty space leaves whatever field was being edited.
     cmp dword [focus], F_PASS
@@ -358,9 +372,11 @@ ui_click:
 .create:
     jmp open_create
 .remove:
+    mov esi, A_REMOVE
     jmp click_remove_member
 .leave:
     mov edi, [my_id]
+    mov esi, A_LEAVE
     jmp click_remove_member
 .issue:
     cmp byte [board], 0
@@ -486,6 +502,8 @@ ui_scroll:
     lea edi, [edi + edi * 2]
     cmp byte [modal], M_SETTINGS
     je .settings
+    cmp byte [modal], M_CHANNEL
+    je .channel
     cmp byte [modal], M_NONE
     jne .done
     cmp dword [pointer_x], SIDEBAR_W
@@ -508,6 +526,9 @@ ui_scroll:
     jmp .vertical
 .settings:
     lea rax, [settings_scroll]
+    jmp .vertical
+.channel:
+    lea rax, [chan_scroll]
     jmp .vertical
 .detail:
     lea rax, [detail_scroll]
@@ -586,8 +607,6 @@ field_command:
     je .team
     cmp ebx, F_MEMBER
     je .member
-    cmp ebx, F_TITLE
-    je .unfocus
     cmp ebx, F_COMMENT
     je .comment
     cmp ebx, F_MESSAGE
@@ -596,14 +615,16 @@ field_command:
     je .edit
     cmp ebx, F_RENAME
     je .rename
-    cmp ebx, F_OLD_PASS
-    je .password
-    cmp ebx, F_NEW_PASS
-    je .password
+    lea ecx, [ebx - F_OLD_PASS]             ; either password box
+    cmp ecx, F_NEW_PASS - F_OLD_PASS
+    jbe .password
     cmp ebx, F_TEAM_RENAME
     je .team_name
     cmp ebx, F_CHANNEL
     je .channel
+    imul ecx, ebx, FD_SIZE
+    test dword [fields + rcx + FD_FLAGS], FF_MULTILINE
+    jz .unfocus                             ; a title, the reason box or the search
     test eax, MOD_CTRL                      ; descriptions: Ctrl+Enter finishes
     jz .newline
     cmp ebx, F_NEW_DESC

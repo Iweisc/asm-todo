@@ -50,6 +50,10 @@ global _start
 %include "issues.asm"
 %include "messages.asm"
 %include "images.asm"
+%include "moderation.asm"
+%include "roles.asm"
+%include "nicknames.asm"
+%include "automod.asm"
 
 _start:
     call ignore_sigpipe

@@ -128,10 +128,13 @@ message_rights:
     mov edx, 1
     ret
 .others:
-    cmp dword [chat_peer], 0                ; owners, and only in channels
+    cmp dword [chat_peer], 0                ; only in channels, for whoever manages messages there
     jg .done
     sub rsp, 8
-    call am_owner
+    mov edi, [chat_peer]
+    call chan_access
+    and eax, CH_MANAGE
+    shr eax, 2
     xor edx, edx
     add rsp, 8
 .done:

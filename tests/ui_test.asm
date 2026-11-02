@@ -51,7 +51,10 @@ global _start
 %include "account.asm"
 %include "dialogs.asm"
 %include "keymap.asm"
+%include "access.asm"
 %include "members.asm"
+%include "dashboard.asm"
+%include "rolepage.asm"
 %include "channel.asm"
 %include "chatedit.asm"
 %include "undo.asm"
@@ -204,6 +207,10 @@ _start:
     call tz_tests
     call keymap_tests
     call mention_tests
+    call moderation_tests
+    call roles_tests
+    call channel_settings_tests
+    call automod_tests
     call controls_tests
     xor edi, edi
     cmp dword [failures], 0
@@ -345,6 +352,8 @@ sign_in:
     mov byte [teams + CO_NAME_LEN], 3
     mov dword [teams + CO_NAME], 'Eng'
     mov dword [current_team], 1
+    mov dword [chan_count], 1               ; #general
+    mov byte [chans + CN_ACCESS], CH_VIEW | CH_SEND | CH_MANAGE | CH_EDIT
     mov dword [member_count], 1
     mov dword [members + CM_ID], 1
     mov byte [members + CM_ROLE], ROLE_OWNER
@@ -1067,7 +1076,7 @@ settings_tests:
     call open_team_settings
     call frame
     xor ebx, ebx
-    mov edi, A_SET_ROLE
+    mov edi, A_MANAGE
     mov esi, 2
     call find_hit
     test rax, rax
@@ -1100,7 +1109,7 @@ settings_tests:
     call find_hit
     test rax, rax
     jnz .member
-    mov edi, A_SET_ROLE
+    mov edi, A_MANAGE
     mov esi, 2
     call find_hit
     test rax, rax
@@ -1141,11 +1150,12 @@ settings_tests:
 channel_tests:
     push rbx
     call add_maya
-    mov dword [chan_count], 1
-    mov byte [chans + CN_SLOT], 1
-    mov dword [chans + CN_CREATOR], 1
-    mov byte [chans + CN_NAME_LEN], 6
-    lea rdi, [chans + CN_NAME]
+    mov dword [chan_count], 2
+    mov byte [chans + CN_SIZE + CN_SLOT], 1
+    mov dword [chans + CN_SIZE + CN_CREATOR], 1
+    mov byte [chans + CN_SIZE + CN_ACCESS], CH_VIEW | CH_SEND | CH_MANAGE | CH_EDIT
+    mov byte [chans + CN_SIZE + CN_NAME_LEN], 6
+    lea rdi, [chans + CN_SIZE + CN_NAME]
     lea rsi, [t_design]
     mov edx, 6
     call put_mem
@@ -1173,7 +1183,7 @@ channel_tests:
     lea rdi, [n_chan_members]
     call check
 
-    mov dword [chan_count], 0
+    mov dword [chan_count], 1
     call channels_changed
     xor esi, esi
     cmp byte [chat_open], 0
@@ -1181,7 +1191,7 @@ channel_tests:
     lea rdi, [n_chan_gone]
     call check
 
-    mov dword [chan_count], 1
+    mov dword [chan_count], 2
     mov edi, 1
     call open_channel_dialog
     call ui_team_opened
@@ -1190,7 +1200,7 @@ channel_tests:
     sete sil
     lea rdi, [n_chan_switch]
     call check
-    mov dword [chan_count], 0
+    mov dword [chan_count], 1
     mov dword [member_count], 1
     mov byte [modal], M_NONE
     mov dword [focus], F_NONE
@@ -1367,3 +1377,5 @@ tz_tests:
 %include "tests/ui_messages.asm"
 %include "tests/ui_controls.asm"
 %include "tests/ui_mentions.asm"
+%include "tests/ui_moderation.asm"
+%include "tests/ui_roles.asm"

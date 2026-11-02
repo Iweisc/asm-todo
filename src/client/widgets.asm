@@ -1,5 +1,7 @@
 ; Pieces the screens are built from: names and dates, wrapped text, text
-; fields, buttons and chips. The menus are in menu.asm.
+; fields, buttons, switches and chips. The menus are in menu.asm.
+
+%define SWITCH_W        36
 
 section .rodata
 text s_backlog,         "Backlog"
@@ -60,14 +62,13 @@ priority_name:
     mov edx, [priority_names + rdi + 8]
     ret
 
-; edi = user id -> rsi = their name, edx = length. Only members are known.
+; edi = user id -> rsi = what the team calls them, edx = length. Only members are known.
 user_name:
     call find_member_row
     test rax, rax
     jz .unknown
-    lea rsi, [rax + CM_NAME]
-    movzx edx, byte [rax + CM_NAME_LEN]
-    ret
+    mov rdi, rax
+    jmp display_name
 .unknown:
     lea rsi, [s_unknown_user]
     mov edx, s_unknown_user_len
@@ -1067,5 +1068,72 @@ draw_item_icon:
 .done:
     pop r13
     pop r12
+    pop rbx
+    ret
+
+; A filled disc. edi = center x, esi = center y, edx = radius, ecx = color
+fill_disc:
+    shl edi, 2
+    shl esi, 2
+    shl edx, 2
+    jmp aa_disc
+
+; A switch, on or off, and its hit region when it's enabled.
+; edi = x, esi = y, edx = 1 for on, ecx = 1 for enabled, r8d = action, r9d = arg
+draw_switch:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 8
+    mov ebx, edi
+    mov ebp, esi
+    mov r12d, edx
+    mov r13d, ecx
+    mov r14d, r8d
+    mov r15d, r9d
+    mov r8d, C_LINE
+    mov eax, C_ACCENT
+    test r12d, r12d
+    cmovnz r8d, eax
+    test r13d, r13d
+    jnz .pill
+    mov r8d, C_RAISED
+.pill:
+    mov edi, ebx
+    mov esi, ebp
+    mov edx, SWITCH_W
+    mov ecx, 20
+    mov r9d, 10
+    call fill_rrect
+    lea edi, [ebx + 10]
+    lea eax, [ebx + SWITCH_W - 10]
+    test r12d, r12d
+    cmovnz edi, eax
+    lea esi, [ebp + 10]
+    mov edx, 7
+    mov ecx, 0xffffff
+    mov eax, C_DIM
+    test r13d, r13d
+    cmovz ecx, eax
+    call fill_disc
+    test r13d, r13d
+    jz .done
+    mov edi, ebx
+    mov esi, ebp
+    mov edx, SWITCH_W
+    mov ecx, 20
+    mov r8d, r14d
+    mov r9d, r15d
+    call add_hit
+.done:
+    add rsp, 8
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
     pop rbx
     ret
