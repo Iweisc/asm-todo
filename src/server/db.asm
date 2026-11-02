@@ -328,6 +328,7 @@ journal_fd:         resd 1
 journal_size:       resq 1
 dirty_count:        resd 1
 dirty_overflow:     resb 1
+journal_unsynced:   resb 1                  ; batches written since the last fdatasync
 dirty_table:        resb DIRTY_MAX
 alignb 4
 dirty_slot:         resd DIRTY_MAX
@@ -766,6 +767,7 @@ db_compact:
     mov qword [journal_size], 8
     mov dword [dirty_count], 0
     mov byte [dirty_overflow], 0
+    mov byte [journal_unsynced], 0
     ret
 
 ; Writes a snapshot to path.tmp, fsyncs, renames it over the real file and
@@ -877,7 +879,8 @@ db_touch:
     mov byte [dirty_overflow], 1            ; db_commit takes a snapshot instead
     ret
 
-; Makes every touched row durable.
+; Writes every touched row to the journal. It isn't durable until db_sync, and
+; conn_flush holds back every reply until then.
 db_commit:
     push rbx
     push r12
@@ -927,11 +930,7 @@ db_commit:
     call write_all
     test rax, rax
     jnz db_fail
-    mov eax, SYS_fdatasync
-    mov edi, [journal_fd]
-    syscall
-    test eax, eax
-    jnz db_fail
+    mov byte [journal_unsynced], 1
     mov dword [dirty_count], 0
     add [journal_size], r13
     cmp qword [journal_size], JOURNAL_MAX
@@ -942,6 +941,19 @@ db_commit:
     pop r13
     pop r12
     pop rbx
+    ret
+
+; One fdatasync for every batch db_commit wrote since the last one.
+db_sync:
+    cmp byte [journal_unsynced], 0
+    je .done
+    mov eax, SYS_fdatasync
+    mov edi, [journal_fd]
+    syscall
+    test eax, eax
+    jnz db_fail
+    mov byte [journal_unsynced], 0
+.done:
     ret
 
 ; Writes the public key as hex to <db>.pub so clients can be pointed at it.

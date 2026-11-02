@@ -578,11 +578,11 @@ send_frame:
     mov r15d, ecx
     call conn_addr
     mov r12, rax
-    mov eax, [r12 + C_OUT_LEN]
-    add eax, r15d
-    add eax, 4
-    cmp eax, OUT_SIZE
-    ja .overflow
+    mov edi, ebx
+    lea esi, [r15d + 4]
+    call conn_room
+    test eax, eax
+    jz .overflow
     mov edi, ebx
     call conn_out_buf
     mov edi, [r12 + C_OUT_LEN]
@@ -629,10 +629,11 @@ send_msg:
     jne .done
     test byte [r12 + C_FLAGS], F_KILL
     jnz .done
-    mov eax, [r12 + C_OUT_LEN]
-    lea eax, [eax + r14d + NOISE_TAG + 4]
-    cmp eax, OUT_SIZE
-    ja .overflow
+    mov edi, ebx
+    lea esi, [r14d + NOISE_TAG + 4]
+    call conn_room
+    test eax, eax
+    jz .overflow
     mov edi, ebx
     call conn_out_buf
     mov edi, [r12 + C_OUT_LEN]
@@ -665,17 +666,52 @@ send_msg:
     pop rbx
     ret
 
+; Makes room for more output. Output only waiting on a commit isn't a slow
+; peer, so that syncs early and sends instead of failing.
+; edi = index, esi = bytes -> eax = 1 if they fit
+conn_room:
+    push rbx
+    push r12
+    push r13
+    mov ebx, edi
+    mov r12d, esi
+    call conn_addr
+    mov r13, rax
+.check:
+    mov eax, [r13 + C_OUT_LEN]
+    add eax, r12d
+    cmp eax, OUT_SIZE
+    jbe .fits
+    cmp byte [journal_unsynced], 0
+    je .full
+    call db_sync
+    mov edi, ebx
+    call conn_flush
+    jmp .check
+.fits:
+    mov eax, 1
+    jmp .done
+.full:
+    xor eax, eax
+.done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
 ; Writes as much queued output as the socket takes, and asks epoll for
-; EPOLLOUT only while something is left. edi = index
+; EPOLLOUT only while something is left. Nothing goes while a commit isn't on
+; disk yet, conn_send_held sends it after. A killed connection still gets
+; what was queued before the kill, like a kicked member's reason. edi = index
 conn_flush:
     push rbx
     push r12
     push r13
     mov ebx, edi
+    cmp byte [journal_unsynced], 0
+    jne .done
     call conn_addr
     mov r12, rax
-    test byte [r12 + C_FLAGS], F_KILL
-    jnz .done
     mov edi, ebx
     call conn_out_buf
     mov r13, rax
@@ -736,6 +772,26 @@ conn_flush:
 .done:
     pop r13
     pop r12
+    pop rbx
+    ret
+
+; Makes this turn's commits durable with one fdatasync, then sends the
+; replies they held back.
+conn_send_held:
+    push rbx
+    call db_sync
+    xor ebx, ebx
+.loop:
+    mov edi, ebx
+    call conn_addr
+    cmp dword [rax + C_OUT_LEN], 0
+    je .next
+    mov edi, ebx
+    call conn_flush
+.next:
+    inc ebx
+    cmp ebx, MAX_CONN
+    jb .loop
     pop rbx
     ret
 
