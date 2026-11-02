@@ -2,9 +2,9 @@
 ; change and remove them, editing and deleting your own, and drawing one.
 ; Owners can delete anyone's. Edits and deletions are ops like any other, so
 ; they show right away and wait in the queue while offline. Messages share
-; the Edit and Delete strip drawn here.
+; the Edit and Delete links drawn here.
 
-%define ACTIONS_W 112                   ; the strip behind Edit and Delete
+%define ACTIONS_W 96                    ; room for Edit and "Delete?"
 
 section .rodata
 text s_edit,            "Edit"
@@ -321,10 +321,10 @@ actions_hovered:
 .done:
     ret
 
-; Edit and Delete on a strip at a comment's or message's top right. Delete
-; turns red and asks once it's been clicked. edi = A_COMMENT or A_MESSAGE,
-; whose Edit and Delete actions follow it, esi = its id, edx = the right edge,
-; ecx = the strip's top, r8d = 1 to show Edit too, r9d = 1 if Delete is asking
+; Edit and Delete as links ending at a comment's or message's right edge.
+; Delete turns red and asks once it's been clicked. edi = A_COMMENT or
+; A_MESSAGE, whose Edit and Delete actions follow it, esi = its id, edx = the
+; right edge, ecx = the baseline, r8d = 1 to show Edit too, r9d = 1 if Delete is asking
 draw_actions:
     push rbx
     push rbp
@@ -339,14 +339,14 @@ draw_actions:
     mov r13d, ecx
     mov r14d, r8d
     mov r15d, r9d
+    ; A message without a header has them on its first line, so blank the
+    ; text under them.
     lea edi, [r12d - ACTIONS_W]
-    mov esi, r13d
+    lea esi, [r13d - 15]
     mov edx, ACTIONS_W
-    mov ecx, 24
-    mov r8d, C_LINE
-    mov r9d, C_RAISED
-    mov r10d, 6
-    call outline_rrect
+    mov ecx, 20
+    mov r8d, C_PANEL
+    call fill_rect
     lea rdx, [s_delete_short]
     mov ecx, s_delete_short_len
     mov r8d, C_DIM
@@ -356,25 +356,25 @@ draw_actions:
     mov ecx, s_delete_sure_len
     mov r8d, C_DANGER
 .delete:
-    lea edi, [r12d - 10]
-    lea esi, [r13d + 17]
+    mov edi, r12d
+    mov esi, r13d
     call draw_link
     mov r12d, eax
     mov edi, eax
-    lea esi, [r13d + 17]
+    mov esi, r13d
     lea r8d, [ebx + 2]
     mov r9d, ebp
     call add_link_hit
     test r14d, r14d
     jz .done
     lea edi, [r12d - 14]
-    lea esi, [r13d + 17]
+    mov esi, r13d
     lea rdx, [s_edit]
     mov ecx, s_edit_len
     mov r8d, C_DIM
     call draw_link
     mov edi, eax
-    lea esi, [r13d + 17]
+    mov esi, r13d
     lea r8d, [ebx + 1]
     mov r9d, ebp
     call add_link_hit
@@ -389,7 +389,7 @@ draw_actions:
     ret
 
 ; A comment's Edit and Delete, while the pointer is on it or Delete is asking.
-; rdi = view comment, esi = the right edge, edx = the strip's top
+; rdi = view comment, esi = the right edge, edx = the baseline
 draw_comment_actions:
     push rbx
     push r12
@@ -584,7 +584,7 @@ draw_comment:
     mov rdi, rbx
     mov esi, r14d
     add esi, r15d
-    lea edx, [r12d - 3]                     ; the strip's text on the header's baseline
+    lea edx, [r12d + 14]
     call draw_comment_actions
     mov eax, ebp
     add rsp, 8

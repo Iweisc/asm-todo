@@ -260,7 +260,7 @@ edit_box_height:
     ret
 
 ; A message's Edit and Delete, while the pointer is on it or Delete is asking.
-; rdi = view message, esi = the right edge, edx = the strip's top
+; rdi = view message, esi = the right edge, edx = the baseline
 draw_message_actions:
     push rbx
     push r12

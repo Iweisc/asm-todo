@@ -130,7 +130,7 @@ message_tests:
     call actions_inset
     xor esi, esi
     test eax, eax
-    jle .same
+    js .same
     cmp eax, [comment_inset]
     sete sil
 .same:
