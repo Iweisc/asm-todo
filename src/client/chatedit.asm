@@ -3,8 +3,6 @@
 ; comments these go straight to the server rather than through the op
 ; queue, so they need a connection.
 
-%define MESSAGE_ACTIONS_W 112           ; the strip behind Edit and Delete
-
 section .bss
 alignb 4
 editing_message:    resd 1              ; the message open for editing, 0 for none
@@ -261,96 +259,43 @@ edit_box_height:
     pop rbx
     ret
 
-; Edit and Delete on a strip at a message's top right, while the pointer is
-; on it. Delete turns red and asks once it's been clicked.
+; A message's Edit and Delete, while the pointer is on it or Delete is asking.
 ; rdi = view message, esi = the right edge, edx = the strip's top
 draw_message_actions:
     push rbx
-    push rbp
     push r12
     push r13
-    sub rsp, 8
     mov rbx, rdi
     mov r12d, esi
     mov r13d, edx
-    mov ebp, [rbx + CH_ID]
-    test ebp, ebp
-    jz .done
-    cmp ebp, [editing_message]
-    je .done
-    cmp ebp, [message_armed]
-    je .shown
-    mov edi, A_MESSAGE
-    mov esi, ebp
-    call hovering
-    test eax, eax
-    jnz .shown
-    mov edi, A_EDIT_MESSAGE
-    mov esi, ebp
-    call hovering
-    test eax, eax
-    jnz .shown
-    mov edi, A_DELETE_MESSAGE
-    mov esi, ebp
-    call hovering
-    test eax, eax
-    jnz .shown
-    mov esi, [rbx + CH_IMAGE + RI_ID]
+    mov esi, [rbx + CH_ID]
     test esi, esi
     jz .done
-    mov edi, A_IMAGE
-    call hovering
+    cmp esi, [editing_message]
+    je .done
+    cmp esi, [message_armed]
+    je .shown
+    mov edi, A_MESSAGE
+    mov edx, [rbx + CH_IMAGE + RI_ID]
+    call actions_hovered
     test eax, eax
     jz .done
 .shown:
     mov rdi, rbx
     call message_rights
-    mov [rsp], edx
     test eax, eax
     jz .done
-    lea edi, [r12d - MESSAGE_ACTIONS_W]
-    mov esi, r13d
-    mov edx, MESSAGE_ACTIONS_W
-    mov ecx, 24
-    mov r8d, C_LINE
-    mov r9d, C_RAISED
-    mov r10d, 6
-    call outline_rrect
-    lea rdx, [s_delete_short]
-    mov ecx, s_delete_short_len
-    mov r8d, C_DIM
-    cmp ebp, [message_armed]
-    jne .delete
-    lea rdx, [s_delete_sure]
-    mov ecx, s_delete_sure_len
-    mov r8d, C_DANGER
-.delete:
-    lea edi, [r12d - 10]
-    lea esi, [r13d + 17]
-    call draw_link
-    mov r12d, eax
-    mov edi, eax
-    lea esi, [r13d + 17]
-    mov r8d, A_DELETE_MESSAGE
-    mov r9d, ebp
-    call add_link_hit
-    cmp dword [rsp], 0
-    je .done
-    lea edi, [r12d - 14]
-    lea esi, [r13d + 17]
-    lea rdx, [s_edit]
-    mov ecx, s_edit_len
-    mov r8d, C_DIM
-    call draw_link
-    mov edi, eax
-    lea esi, [r13d + 17]
-    mov r8d, A_EDIT_MESSAGE
-    mov r9d, ebp
-    call add_link_hit
+    mov r8d, edx
+    mov esi, [rbx + CH_ID]
+    xor r9d, r9d
+    cmp esi, [message_armed]
+    sete r9b
+    mov edi, A_MESSAGE
+    mov edx, r12d
+    mov ecx, r13d
+    call draw_actions
 .done:
-    add rsp, 8
     pop r13
     pop r12
-    pop rbp
     pop rbx
     ret

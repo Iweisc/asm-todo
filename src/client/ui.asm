@@ -171,7 +171,7 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define A_ROW_STATUS    24              ; arg = issue id
 %define A_ROW_PRIORITY  25              ; arg = issue id
 %define A_CHAT          26              ; arg = peer, 0 for the team's channel
-%define A_COMMENT       27              ; arg = comment id, shows its actions on hover
+%define A_COMMENT       27              ; arg = comment id, shows its actions on hover. draw_actions wants Edit and Delete next
 %define A_EDIT_COMMENT  28              ; arg = comment id
 %define A_DELETE_COMMENT 29             ; arg = comment id
 %define A_CLOSE_MODAL   30              ; the X in a modal's corner
@@ -185,7 +185,7 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define A_CHANNEL_DIALOG 38             ; arg = the channel's slot, 0 for a new one
 %define A_SAVE_CHANNEL  39
 %define A_DELETE_CHANNEL 40
-%define A_MESSAGE       41              ; arg = message id, shows its actions on hover
+%define A_MESSAGE       41              ; arg = message id, shows its actions on hover. draw_actions wants Edit and Delete next
 %define A_EDIT_MESSAGE  42              ; arg = message id
 %define A_DELETE_MESSAGE 43             ; arg = message id
 %define A_IMAGE         44              ; arg = image id, opens it

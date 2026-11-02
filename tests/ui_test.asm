@@ -113,14 +113,9 @@ n_dm_rows:      db "direct messages list everyone but you", 0
 n_chan_row:     db "a channel gets a sidebar row and, for its maker, an edit link", 0
 n_chan_members: db "a member list update keeps an open channel open", 0
 n_chan_gone:    db "a deleted channel's conversation closes", 0
-n_msg_edited:   db "an edited message shows its new text and its mark", 0
-n_msg_deleted:  db "a deleted message leaves the conversation", 0
-n_msg_edit:     db "hovering your message offers Edit, which opens it in place", 0
 n_undo:         db "undo takes back a word at a time, and redo puts it back", 0
 n_undo_reset:   db "a field given new text can't undo back into the old one", 0
 n_chan_switch:  db "switching teams closes the channel dialog", 0
-n_msg_image:    db "a message's image opens over the conversation, and Esc closes just it", 0
-n_image_gone:   db "the server saying an image is gone ends a download partway in", 0
 n_auth_wait:    db "logging in mid-reconnect waits for the connection, and says so if it fails", 0
 
 ; A zone file: +1h, then -2h from t = 1000, then +1h again from t = 2000.
@@ -145,19 +140,6 @@ t_deleted_event: dd ISSUE_ID, 11
 t_deleted_event_len equ $ - t_deleted_event
 t_x:            db "x", 0
 t_hi_yo_keys:   db 35, 23, 57, 21, 24, 0  ; "hi yo" on a US keyboard
-; MSG_CHAT_EDITED for message 22, with image 77, and MSG_CHAT_DELETED for 21, past the type byte.
-t_chat_edited:  dd 1, 22, 1, 0, 0
-                dw 1
-                db "Z", 1
-                dd 77
-                dw 640, 480
-t_chat_edited_len equ $ - t_chat_edited
-t_chat_deleted: dd 1, 21
-t_chat_deleted_len equ $ - t_chat_deleted
-; MSG_IMAGE saying image 77 can't be sent: no bytes, at offset 0, past the type byte.
-t_image_gone:   dd 77, 0, 0
-                dw 0
-t_image_gone_len equ $ - t_image_gone
 t_maya:         db "maya"
 t_design:       db "design"
 ; A French keymap, cut down to four keys, in the shapes xkbcommon and
@@ -720,6 +702,10 @@ comment_tests:
     mov edi, A_COMMENT
     mov esi, 13
     call hover_hit
+    mov edi, A_COMMENT
+    mov esi, 13
+    call actions_inset
+    mov [comment_inset], eax
     mov edi, A_EDIT_COMMENT
     mov esi, 13
     call click_hit
@@ -1209,128 +1195,6 @@ channel_tests:
     pop rbx
     ret
 
-; Editing and deleting messages in #general.
-message_tests:
-    push rbx
-    xor edi, edi
-    call open_chat
-    mov byte [chat_loaded], 1
-    xor ebx, ebx
-.add:
-    imul eax, ebx, CH_SIZE
-    lea rdi, [chat_msgs + rax]
-    lea ecx, [ebx + 21]
-    mov [rdi + CH_ID], ecx
-    mov dword [rdi + CH_AUTHOR], 1
-    mov word [rdi + CH_LEN], 1
-    lea ecx, [ebx + 'a']
-    mov [rdi + CH_TEXT], cl
-    inc ebx
-    cmp ebx, 3
-    jb .add
-    mov dword [chat_count], 3
-    call rebuild_chat
-
-    lea rdi, [t_chat_edited]
-    mov esi, t_chat_edited_len
-    call rd_begin
-    call on_chat_edited
-    call rd_ok
-    xor esi, esi
-    test eax, eax
-    jz .edited
-    cmp byte [view_chat + CH_SIZE + CH_TEXT], 'Z'
-    jne .edited
-    cmp byte [view_chat + CH_SIZE + CH_EDITED], 1
-    sete sil
-.edited:
-    lea rdi, [n_msg_edited]
-    call check
-
-    lea rdi, [t_chat_deleted]
-    mov esi, t_chat_deleted_len
-    call rd_begin
-    call on_chat_deleted
-    call rd_ok
-    xor esi, esi
-    test eax, eax
-    jz .deleted
-    cmp dword [view_chat_count], 2
-    jne .deleted
-    cmp dword [view_chat + CH_ID], 22
-    jne .deleted
-    cmp dword [view_chat + CH_SIZE + CH_ID], 23
-    sete sil
-.deleted:
-    lea rdi, [n_msg_deleted]
-    call check
-
-    call frame
-    xor ebx, ebx
-    mov edi, A_MESSAGE
-    mov esi, 22
-    call find_hit
-    test rax, rax
-    jz .edit
-    call point_at_hit
-    call frame                              ; hover follows the frame before
-    call frame
-    mov edi, A_EDIT_MESSAGE
-    mov esi, 22
-    call click_hit
-    test eax, eax
-    jz .edit
-    cmp dword [editing_message], 22
-    jne .edit
-    cmp dword [focus], F_EDIT
-    jne .edit
-    mov edi, KEY_ESC
-    call field_command
-    cmp dword [editing_message], 0
-    sete bl
-.edit:
-    mov esi, ebx
-    lea rdi, [n_msg_edit]
-    call check
-
-    call frame
-    xor ebx, ebx
-    mov edi, A_IMAGE
-    mov esi, 77
-    call click_hit
-    test eax, eax
-    jz .image
-    cmp byte [modal], M_IMAGE
-    jne .image
-    cmp dword [view_id], 77
-    jne .image
-    mov edi, KEY_ESC
-    call ui_key
-    cmp byte [modal], M_NONE
-    jne .image
-    movzx ebx, byte [chat_open]
-.image:
-    mov esi, ebx
-    lea rdi, [n_msg_image]
-    call check
-
-    mov dword [dl_id], 77
-    mov dword [dl_got], IMAGE_PART
-    lea rdi, [t_image_gone]
-    mov esi, t_image_gone_len
-    call rd_begin
-    call on_image
-    xor esi, esi
-    cmp dword [dl_id], 0
-    sete sil
-    lea rdi, [n_image_gone]
-    call check
-    call close_detail
-    mov dword [chat_count], 0
-    call rebuild_chat
-    pop rbx
-    ret
-
 ; edi = field, esi = expected length, edx = its first byte -> eax = 1 if it matches
 field_is:
     push rbx
@@ -1497,4 +1361,5 @@ tz_tests:
     call check
     pop rbx
     ret
+%include "tests/ui_messages.asm"
 %include "tests/ui_controls.asm"
