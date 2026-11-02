@@ -231,6 +231,19 @@ broadcast_members:
     movzx edx, byte [rax + USER_NAME_LEN]
     call wr_str
     mov r15, rdi
+    mov rdi, rbx
+    call is_timed_out
+    neg eax
+    and eax, [rbx + MEM_TIMEOUT]            ; one that's over goes out as 0
+    mov rdi, r15
+    mov esi, eax
+    call wr_u32
+    movzx esi, word [rbx + MEM_ROLES]
+    call wr_u16
+    mov esi, r12d
+    mov edx, [rbx + MEM_USER]
+    call wr_nick
+    mov r15, rdi
     inc r13d
 .next:
     add rbx, MEM_SIZE
@@ -287,7 +300,7 @@ add_member_row:
     jz .done
     mov [rax + MEM_TEAM], ebx
     mov [rax + MEM_USER], r12d
-    mov [rax + MEM_ROLE], r13d
+    mov [rax + MEM_ROLE], r13b
     mov rbx, rax
     mov edi, T_MEMBERS
     mov rsi, rax
@@ -355,6 +368,8 @@ h_create_team:
     test rax, rax
     jz .no_member_room
     inc dword [next_team_id]
+    mov edi, [rbx + TEAM_ID]
+    call add_default_roles
     mov dword [rbx + TEAM_NEXT_NUM], 1
     mov [rbx + TEAM_KEY_LEN], r15b
     lea rdi, [rbx + TEAM_KEY]
@@ -429,7 +444,7 @@ require_owner:
     call find_member
     test rax, rax
     jz .not_member
-    cmp dword [rax + MEM_ROLE], ROLE_OWNER
+    cmp byte [rax + MEM_ROLE], ROLE_OWNER
     jne .not_owner
     mov eax, 1
     ret
@@ -460,8 +475,9 @@ h_add_member:
     test eax, eax
     jz .violation
     mov edi, r14d
-    call require_owner
-    test eax, eax
+    mov esi, PERM_INVITE
+    call require_perm
+    test rax, rax
     jz .done
     mov rsi, r12
     mov edx, r13d
@@ -474,6 +490,11 @@ h_add_member:
     call find_member
     test rax, rax
     jnz .already
+    mov edi, r14d
+    mov esi, [rbx + USER_ID]
+    call find_ban
+    test rax, rax
+    jnz .banned
     mov edi, T_MEMBERS
     mov esi, MEM_TEAM
     mov edx, r14d
@@ -490,11 +511,21 @@ h_add_member:
     call add_member_row
     test rax, rax
     jz .full
+    mov edi, r14d
+    mov esi, AU_INVITE
+    mov edx, [rbx + USER_ID]
+    xor ecx, ecx
+    xor r8d, r8d
+    xor r9d, r9d
+    call audit_add
     call db_commit
     mov edi, [rbx + USER_ID]
     call send_teams_to_user
     mov edi, r14d
     call broadcast_members
+    mov edi, r14d
+    mov esi, -1
+    call send_moderation
     jmp .done
 .violation:
     call kill_cur
@@ -502,6 +533,10 @@ h_add_member:
 .no_user:
     lea rsi, [e_no_user]
     mov edx, e_no_user_len
+    jmp .error
+.banned:
+    lea rsi, [e_banned]
+    mov edx, e_banned_len
     jmp .error
 .already:
     lea rsi, [e_already_member]
@@ -553,9 +588,101 @@ unsubscribe_user:
     pop rbx
     ret
 
-; Removing someone (or leaving) also unassigns them from the team's issues,
-; one EV_ISSUE each so everyone's view stays in step.
+; MSG_REMOVE_MEMBER: leaving, or kicking someone below you.
 h_remove_member:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    call rd_u32
+    mov r12d, eax                           ; team
+    call rd_u32
+    mov r13d, eax                           ; user being removed
+    call rd_str
+    mov r14, rax
+    mov r15d, edx                           ; reason
+    call rd_ok
+    test eax, eax
+    jz .violation
+    mov rsi, r14
+    mov edx, r15d
+    call valid_reason
+    test eax, eax
+    jz .bad_reason
+    mov rax, [cur]
+    cmp [rax + C_USER], r13d
+    je .leave
+    mov edi, r12d
+    mov esi, r13d
+    mov edx, PERM_KICK
+    call moderated_member
+    test rax, rax
+    jz .done
+    mov rbx, rax
+    mov edi, r12d
+    mov esi, AU_KICK
+    mov edx, r13d
+    xor ecx, ecx
+    mov r8, r14
+    mov r9d, r15d
+    call audit_add
+    mov edi, r12d
+    mov esi, r13d
+    mov rdx, rbx
+    call drop_member
+    mov edi, r12d
+    mov esi, -1
+    call send_moderation
+    jmp .done
+.leave:
+    mov edi, r12d
+    mov esi, r13d
+    call find_member
+    test rax, rax
+    jz .not_member
+    mov rbx, rax
+    cmp byte [rax + MEM_ROLE], ROLE_OWNER
+    jne .drop
+    mov edi, r12d
+    call count_owners
+    cmp eax, 1
+    jbe .last_owner
+.drop:
+    mov edi, r12d
+    mov esi, r13d
+    mov rdx, rbx
+    call drop_member
+    jmp .done
+.violation:
+    call kill_cur
+    jmp .done
+.bad_reason:
+    lea rsi, [e_reason]
+    mov edx, e_reason_len
+    jmp .error
+.not_member:
+    lea rsi, [e_not_member]
+    mov edx, e_not_member_len
+    jmp .error
+.last_owner:
+    lea rsi, [e_last_owner]
+    mov edx, e_last_owner_len
+.error:
+    call send_error
+.done:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Takes someone out of a team. Their seen marks and nickname go too, and they're
+; unassigned from its issues, one EV_ISSUE each so everyone's view stays in
+; step. Commits whatever else the caller touched along with it.
+; edi = team, esi = user, rdx = their member row
+drop_member:
     push rbx
     push rbp
     push r12
@@ -563,49 +690,17 @@ h_remove_member:
     push r14
     push r15
     sub rsp, 8
-    call rd_u32
-    mov r12d, eax                           ; team
-    call rd_u32
-    mov r13d, eax                           ; user being removed
-    call rd_ok
-    test eax, eax
-    jz .violation
-    mov rax, [cur]
-    mov r14d, [rax + C_USER]
-    mov edi, r12d
-    mov esi, r14d
-    call find_member
-    test rax, rax
-    jz .not_member
-    movzx ebx, byte [rax + MEM_ROLE]
-    mov edi, r12d
-    mov esi, r13d
-    call find_member
-    test rax, rax
-    jz .not_theirs
-    cmp r13d, r14d
-    jne .removing_someone
-    cmp ebx, ROLE_OWNER                     ; leaving
-    jne .remove
-    push rax
-    push rax
-    mov edi, r12d
-    call count_owners
-    cmp eax, 1
-    pop rax
-    pop rax
-    jbe .last_owner
-    jmp .remove
-.removing_someone:
-    cmp ebx, ROLE_OWNER
-    jne .owner_only
-.remove:
+    mov r12d, edi
+    mov r13d, esi
     mov edi, T_MEMBERS
-    mov rsi, rax
+    mov rsi, rdx
     call free_row
     mov edi, r12d
     mov esi, r13d
     call forget_seen
+    mov edi, r12d
+    mov esi, r13d
+    call forget_nick
     mov edi, r12d
     call find_team
     mov r15, rax
@@ -667,28 +762,6 @@ h_remove_member:
     call send_teams_to_user
     mov edi, r12d
     call broadcast_members
-    jmp .done
-.violation:
-    call kill_cur
-    jmp .done
-.not_member:
-    lea rsi, [e_not_member]
-    mov edx, e_not_member_len
-    jmp .error
-.not_theirs:
-    lea rsi, [e_not_their_team]
-    mov edx, e_not_their_team_len
-    jmp .error
-.last_owner:
-    lea rsi, [e_last_owner]
-    mov edx, e_last_owner_len
-    jmp .error
-.owner_only:
-    lea rsi, [e_owner_only]
-    mov edx, e_owner_only_len
-.error:
-    call send_error
-.done:
     add rsp, 8
     pop r15
     pop r14
@@ -708,7 +781,7 @@ count_owners:
     jz .done
     cmp [rcx + MEM_TEAM], edi
     jne .next
-    cmp dword [rcx + MEM_ROLE], ROLE_OWNER
+    cmp byte [rcx + MEM_ROLE], ROLE_OWNER
     jne .next
     inc eax
 .next:
@@ -743,8 +816,8 @@ send_teams_to_members:
     pop rbx
     ret
 
-; MSG_SET_ROLE: an owner makes a member an owner, or an owner a member again.
-; The last owner can't stop being one.
+; MSG_SET_ROLE: an owner makes someone an owner or a member. The last owner
+; can't stop being one, and becoming one ends a timeout.
 h_set_role:
     push rbx
     push r12
@@ -760,11 +833,10 @@ h_set_role:
     call rd_ok
     test eax, eax
     jz .violation
-    cmp ebx, ROLE_OWNER
-    je .valid
-    cmp ebx, ROLE_MEMBER
-    jne .violation
-.valid:
+    dec ebx
+    cmp ebx, ROLE_MEMBER - 1                ; ROLE_OWNER or ROLE_MEMBER
+    ja .violation
+    inc ebx
     mov edi, r12d
     call require_owner
     test eax, eax
@@ -775,24 +847,35 @@ h_set_role:
     test rax, rax
     jz .not_theirs
     mov r14, rax
-    cmp [r14 + MEM_ROLE], ebx
+    cmp [r14 + MEM_ROLE], bl
     je .done
-    cmp ebx, ROLE_MEMBER
+    cmp byte [r14 + MEM_ROLE], ROLE_OWNER
     jne .set
     mov edi, r12d
     call count_owners
     cmp eax, 1
     jbe .last_owner
 .set:
-    mov [r14 + MEM_ROLE], ebx
+    mov [r14 + MEM_ROLE], bl
+    cmp ebx, ROLE_OWNER
+    jne .touch
+    mov dword [r14 + MEM_TIMEOUT], 0
+.touch:
     mov edi, T_MEMBERS
     mov rsi, r14
     call db_touch
+    mov edi, r12d
+    mov esi, AU_ROLE
+    mov edx, r13d
+    mov ecx, ebx
+    xor r8d, r8d
+    xor r9d, r9d
+    call audit_add
     call db_commit
     mov edi, r13d
     call send_teams_to_user
     mov edi, r12d
-    call broadcast_members
+    call permissions_changed
     jmp .done
 .violation:
     call kill_cur
@@ -814,7 +897,7 @@ h_set_role:
     pop rbx
     ret
 
-; MSG_RENAME_TEAM: owners only. Every member's team list shows the new name.
+; MSG_RENAME_TEAM: PERM_MANAGE_TEAM. Every member's team list shows the new name.
 h_rename_team:
     push rbx
     push r12
@@ -834,8 +917,9 @@ h_rename_team:
     test eax, eax
     jz .bad_name
     mov edi, ebx
-    call require_owner
-    test eax, eax
+    mov esi, PERM_MANAGE_TEAM
+    call require_perm
+    test rax, rax
     jz .done
     mov edi, ebx
     call find_team
@@ -849,9 +933,19 @@ h_rename_team:
     mov edi, T_TEAMS
     mov rsi, rax
     call db_touch
+    mov edi, ebx
+    mov esi, AU_RENAME_TEAM
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    xor r9d, r9d
+    call audit_add
     call db_commit
     mov edi, ebx
     call send_teams_to_members
+    mov edi, ebx
+    mov esi, -1
+    call send_moderation
     jmp .done
 .violation:
     call kill_cur

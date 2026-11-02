@@ -214,6 +214,11 @@ h_subscribe:
     mov edi, [cur_idx]
     mov esi, r12d
     call send_snapshot
+    mov edi, r12d
+    call build_roles
+    mov edi, [cur_idx]
+    lea rsi, [msg_buf]
+    call send_msg
     mov edi, [cur_idx]
     mov esi, r12d
     call send_channels
@@ -222,6 +227,9 @@ h_subscribe:
     mov esi, r12d
     mov edx, [rax + C_USER]
     call send_unread
+    mov edi, r12d
+    mov esi, [cur_idx]
+    call send_moderation
     mov edi, r12d
     call broadcast_members
     test ebx, ebx
@@ -569,6 +577,10 @@ h_op:
     call find_member
     test rax, rax
     jz .forbidden
+    mov rdi, rax
+    call is_timed_out
+    test eax, eax
+    jnz .timed_out
     mov edi, r14d
     call find_team
     mov [op_team], rax
@@ -584,10 +596,15 @@ h_op:
     mov esi, ebx
     call send_ack
     jmp .done
+.timed_out:
+    mov ebx, ACK_TIMED_OUT
+    jmp .refused
 .forbidden:
+    mov ebx, ACK_FORBIDDEN
+.refused:
     call db_commit
     mov edi, r12d
-    mov esi, ACK_FORBIDDEN
+    mov esi, ebx
     call send_ack
     jmp .done
 .duplicate:
@@ -1111,11 +1128,15 @@ op_edit_comment:
     pop rbx
     ret
 
-; Its author can delete a comment, and so can the team's owners.
+; Its author can delete a comment, and so can the team's owners and
+; moderators, which goes in the audit log.
 op_delete_comment:
     push rbx
+    push rbp
     push r12
     push r13
+    sub rsp, 8
+    xor ebp, ebp                            ; 1 when it's someone else's
     mov edi, [op_issue]
     call op_find_comment
     test rax, rax
@@ -1131,8 +1152,19 @@ op_delete_comment:
     call find_member
     test rax, rax
     jz .forbidden
-    cmp dword [rax + MEM_ROLE], ROLE_OWNER
-    jne .forbidden
+    mov rdi, rax
+    call member_perms
+    test eax, PERM_MANAGE_MESSAGES
+    jz .forbidden
+    inc ebp
+    mov rdi, [op_team]
+    mov edi, [rdi + TEAM_ID]
+    mov esi, AU_DELETE_COMMENT
+    mov edx, [rbx + CMT_AUTHOR]
+    xor ecx, ecx
+    xor r8d, r8d
+    xor r9d, r9d
+    call audit_add
 .allowed:
     mov r13d, [rbx + CMT_ID]
     mov edi, T_COMMENTS
@@ -1145,6 +1177,13 @@ op_delete_comment:
     mov esi, r13d
     call wr_u32
     call send_event
+    test ebp, ebp
+    jz .ok
+    mov rax, [op_team]
+    mov edi, [rax + TEAM_ID]
+    mov esi, -1
+    call send_moderation
+.ok:
     xor eax, eax
     jmp .done
 .gone:
@@ -1153,8 +1192,10 @@ op_delete_comment:
 .forbidden:
     mov eax, ACK_FORBIDDEN
 .done:
+    add rsp, 8
     pop r13
     pop r12
+    pop rbp
     pop rbx
     ret
 

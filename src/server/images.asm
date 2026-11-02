@@ -308,7 +308,14 @@ image_readable:
     je .no                                  ; not sent yet
     mov eax, [rdi + IMG_TO]
     test eax, eax
-    jle .member                             ; #general, a channel or a comment
+    jg .direct
+    cmp byte [rdi + IMG_KIND], IMAGE_ON_MESSAGE
+    jne .member                             ; a comment
+    mov edx, esi                            ; #general or another channel
+    mov esi, eax
+    mov edi, [rdi + IMG_TEAM]
+    jmp peer_visible
+.direct:
     cmp eax, esi
     jne .no                                 ; someone else's direct message
 .member:
@@ -500,10 +507,9 @@ h_upload_image:
     mov rax, [cur]
     mov ebx, [rax + C_USER]
     mov edi, r12d
-    mov esi, ebx
-    call find_member
+    call writable_member
     test rax, rax
-    jz .not_member
+    jz .done
     mov edi, r12d
     mov esi, r13d
     test esi, esi
@@ -571,10 +577,6 @@ h_upload_image:
 .violation:
     call kill_cur
     jmp .done
-.not_member:
-    lea rsi, [e_not_member]
-    mov edx, e_not_member_len
-    jmp .error
 .no_peer:
     lea rsi, [e_no_conversation]
     mov edx, e_no_conversation_len

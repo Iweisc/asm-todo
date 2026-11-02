@@ -1,9 +1,22 @@
-; Team settings: the team's name, its members and their roles, inviting
-; people and leaving. Owners can change all of it. Members can look, and
-; leave. Remove and Leave ask first, with a second click.
+; Team settings, the team's dashboard: its name, then its members, and tabs
+; for its roles, bans, audit log and AutoMod for whoever's permissions get
+; them (access.asm). A member's page (dashboard.asm) changes their
+; nickname and roles, times them out, kicks or bans them, as far as our
+; permissions and rank go. The roles and AutoMod tabs are in rolepage.asm.
+; Everyone can look, search, and leave. Remove, Leave, Kick and Ban ask
+; first, with a second click.
 
-%define SETTINGS_W      560
+%define SETTINGS_W      640
 %define MEMBER_ROW_H    44
+%define LIST_ROW_H      52              ; a ban or an audit entry
+%define CONTENT_TOP     190             ; where the tabs' content starts, from the dialog's top
+%define FIELD_ROW_H     44              ; a field above the list
+%define TAB_MEMBERS     0
+%define TAB_ROLES       1
+%define TAB_BANS        2
+%define TAB_AUDIT       3
+%define TAB_AUTOMOD     4
+%define TAB_COUNT       5
 
 section .rodata
 text s_settings_title,  "Team settings"
@@ -13,34 +26,120 @@ text s_invite,          "Invite"
 text s_you,             "(you)"
 text s_role_owner,      "Owner"
 text s_role_member,     "Member"
-text s_make_owner,      "Make owner"
-text s_make_member,     "Make member"
+text s_manage,          "Manage"
 text s_remove_sure,     "Remove?"
 text s_leave_team,      "Leave team"
 text s_leave_sure,      "Leave?"
+text s_timed_out,       "Timed out"
+text s_no_match,        "Nobody on the team has that in their name."
+text s_tab_roles,       "Roles"
+text s_tab_bans,        "Bans"
+text s_tab_audit,       "Audit log"
+text s_tab_automod,     "AutoMod"
+text s_search_hint,     "Search members"
 text s_settings_hint,   "Removing someone also unassigns them from the team's issues."
+text s_bans_hint,       "Unbanning lets them be invited again. It doesn't add them back."
+text s_audit_hint,      "The newest 50 changes to the team's members, roles and posts."
+text s_roles_hint,      "Members get the permissions of @everyone and each of their roles."
+text s_automod_hint,    "Blocked in channels. One per line, * at either end matches the rest of a word."
+
+align 8
+role_names:     NAME s_role_owner       ; by ROLE_* - 1
+                NAME s_role_member
+tab_names:      NAME s_members          ; by TAB_*
+                NAME s_tab_roles
+                NAME s_tab_bans
+                NAME s_tab_audit
+                NAME s_tab_automod
+tab_hints:      NAME s_settings_hint
+                NAME s_roles_hint
+                NAME s_bans_hint
+                NAME s_audit_hint
+                NAME s_automod_hint
+tab_perms:      dd 0, PERM_MANAGE_ROLES, PERM_BAN, PERM_VIEW_AUDIT, PERM_MANAGE_AUTOMOD
 
 section .bss
 alignb 4
-member_armed:   resd 1                  ; the member whose Remove or Leave was clicked once, 0 for none
+member_armed:   resd 1                  ; the member whose Remove, Leave, Kick or Ban was clicked once, 0 for none
+armed_action:   resd 1                  ; which of those it was
 settings_scroll: resd 1
+settings_tab:   resd 1                  ; TAB_*
+managing:       resd 1                  ; the member whose page is open, 0 for the list
+search_buf:     resb USERNAME_MAX
 
 section .text
 
-; -> eax = 1 if we own the current team
-am_owner:
+; -> eax = our role in the current team, 0 without one
+my_role:
     sub rsp, 8
     call current_team_row
     test rax, rax
     jz .done
-    cmp byte [rax + CO_ROLE], ROLE_OWNER
-    sete al
-    movzx eax, al
+    movzx eax, byte [rax + CO_ROLE]
 .done:
     add rsp, 8
     ret
 
-; Opens the dialog with the team's name ready to edit. edi = field to focus
+; -> eax = 1 if we own the current team
+am_owner:
+    sub rsp, 8
+    call my_role
+    cmp eax, ROLE_OWNER
+    sete al
+    movzx eax, al
+    add rsp, 8
+    ret
+
+; edi = TAB_* -> eax = 1 if our permissions get us that tab
+tab_shown:
+    mov edi, [tab_perms + rdi * 4]
+    mov eax, 1
+    test edi, edi
+    jz .done
+    jmp has_perm
+.done:
+    ret
+
+; -> eax = 1 if we get any tab besides the members
+any_tabs:
+    push rbx
+    mov ebx, 1
+.tab:
+    mov edi, ebx
+    call tab_shown
+    test eax, eax
+    jnz .done
+    inc ebx
+    cmp ebx, TAB_COUNT
+    jb .tab
+.done:
+    pop rbx
+    ret
+
+; rdi = member row -> eax = 1 if they're timed out right now
+member_timed_out:
+    push rbx
+    mov ebx, [rdi + CM_TIMEOUT]
+    call unix_now
+    cmp ebx, eax
+    seta al
+    movzx eax, al
+    pop rbx
+    ret
+
+; edi = ROLE_* -> rsi = its name, edx = length
+role_name:
+    dec edi
+    cmp edi, ROLE_MEMBER - 1
+    jbe .known
+    mov edi, ROLE_MEMBER - 1                ; whatever it is, it's no more than a member
+.known:
+    shl edi, 4
+    mov rsi, [role_names + rdi]
+    mov edx, [role_names + rdi + 8]
+    ret
+
+; Opens the dialog on its member list. edi = field to focus
 open_team_settings:
     push rbx
     mov ebx, edi
@@ -49,6 +148,13 @@ open_team_settings:
     xor eax, eax
     mov [member_armed], eax
     mov [settings_scroll], eax
+    mov [settings_tab], eax
+    mov [managing], eax
+    mov dword [role_editing], ROLE_LIST
+    mov edi, F_SEARCH
+    call field_clear
+    mov edi, F_REASON
+    call field_clear
     call current_team_row
     test rax, rax
     jz .focus
@@ -57,11 +163,12 @@ open_team_settings:
     mov edi, F_TEAM_RENAME
     call field_set
 .focus:
-    call am_owner
+    mov edi, PERM_INVITE
+    call has_perm
     test eax, eax
-    jnz .owner
-    mov ebx, F_NONE                         ; the boxes are only drawn for owners
-.owner:
+    jnz .staff
+    mov ebx, F_NONE                         ; the invite box is only drawn for those who can invite
+.staff:
     mov edi, ebx
     call set_focus
     pop rbx
@@ -114,32 +221,43 @@ submit_invite:
     add rsp, 8
     ret
 
-; Makes a member an owner, or an owner a member. edi = user id
-click_set_role:
+; The first click on Remove, Leave, Kick or Ban asks, the second goes ahead.
+; edi = user id, esi = the action -> eax = 1 on the second
+confirm_member:
+    cmp edi, [member_armed]
+    jne .arm
+    cmp esi, [armed_action]
+    jne .arm
+    xor eax, eax
+    mov [member_armed], eax
+    inc eax
+    ret
+.arm:
+    mov [member_armed], edi
+    mov [armed_action], esi
+    xor eax, eax
+    ret
+
+; Remove in the member list, or Leave. edi = user id, esi = A_REMOVE or A_LEAVE
+click_remove_member:
     push rbx
     mov ebx, edi
-    call find_member_row
-    test rax, rax
+    call confirm_member
+    test eax, eax
     jz .done
-    mov esi, ROLE_OWNER
-    mov ecx, ROLE_MEMBER
-    cmp byte [rax + CM_ROLE], ROLE_OWNER
-    cmove esi, ecx
     mov edi, ebx
-    call sync_set_role
+    xor esi, esi
+    xor edx, edx
+    call sync_remove_member
 .done:
     pop rbx
     ret
 
-; The first click on Remove or Leave asks, the second does it. edi = user id
-click_remove_member:
-    cmp edi, [member_armed]
-    je .sure
-    mov [member_armed], edi
-    ret
-.sure:
-    mov dword [member_armed], 0
-    jmp sync_remove_member
+; Gives the member being managed a role. edi = ROLE_*
+click_set_role:
+    mov esi, edi
+    mov edi, [managing]
+    jmp sync_set_role
 
 ; edi = user id, esi = ROLE_*
 sync_set_role:
@@ -192,6 +310,165 @@ sync_rename_team:
     pop rbx
     ret
 
+; Switches team settings to another tab, at its top. edi = TAB_*
+click_tab:
+    mov [settings_tab], edi
+    xor eax, eax
+    mov [managing], eax
+    mov [settings_scroll], eax
+    mov [member_armed], eax
+    mov dword [role_editing], ROLE_LIST
+    mov edi, F_NONE
+    jmp set_focus
+
+; Opens a member's page, with their nickname to edit, or goes back to the
+; list. edi = user id, 0 for the list
+click_manage:
+    sub rsp, 8
+    mov [managing], edi
+    xor eax, eax
+    mov [settings_scroll], eax
+    mov [member_armed], eax
+    mov [ban_history], eax
+    mov edi, F_REASON
+    call field_clear
+    mov edi, F_NICK
+    call field_clear
+    mov edi, [managing]
+    call find_member_row
+    test rax, rax
+    jz .focus
+    lea rsi, [rax + CM_NICK]
+    movzx edx, byte [rax + CM_NICK_LEN]
+    mov edi, F_NICK
+    call field_set
+.focus:
+    mov edi, F_NONE
+    call set_focus
+    add rsp, 8
+    ret
+
+; The member list changed, or our roles did. A member's page closes once
+; they're gone or out of our reach, and a tab once we can't see it.
+settings_members_changed:
+    sub rsp, 8
+    mov edi, [settings_tab]
+    call tab_shown
+    test eax, eax
+    jnz .page
+    mov dword [settings_tab], TAB_MEMBERS
+.page:
+    mov edi, [managing]
+    test edi, edi
+    jz .done
+    call find_member_row
+    test rax, rax
+    jz .close
+    mov rdi, rax
+    call can_manage
+    test eax, eax
+    jnz .done
+.close:
+    mov dword [managing], 0
+.done:
+    add rsp, 8
+    ret
+
+; rdi = name, esi = length -> eax = 1 if the search box is empty or the name
+; has what's in it, ignoring case
+name_matches:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov rbx, rdi
+    mov r12d, esi
+    mov edi, F_SEARCH
+    call field_trimmed
+    mov eax, 1
+    test edx, edx
+    jz .done
+    mov r8, rbx                             ; where the match would start
+    mov r9d, r12d                           ; and what's left from there
+.start:
+    xor eax, eax
+    cmp r9d, edx
+    jb .done
+    xor ecx, ecx
+.char:
+    cmp ecx, edx
+    jae .found
+    movzx eax, byte [r8 + rcx]
+    lea r10d, [eax - 'A']
+    cmp r10d, 'Z' - 'A'
+    ja .name_lower
+    or eax, 0x20
+.name_lower:
+    movzx r11d, byte [rsi + rcx]
+    lea r10d, [r11d - 'A']
+    cmp r10d, 'Z' - 'A'
+    ja .search_lower
+    or r11d, 0x20
+.search_lower:
+    cmp eax, r11d
+    jne .next
+    inc ecx
+    jmp .char
+.next:
+    inc r8
+    dec r9d
+    jmp .start
+.found:
+    mov eax, 1
+.done:
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
+; rdi = member row -> eax = 1 if the search box lets them through, by
+; username or nickname
+member_matches:
+    push rbx
+    mov rbx, rdi
+    lea rdi, [rbx + CM_NAME]
+    movzx esi, byte [rbx + CM_NAME_LEN]
+    call name_matches
+    test eax, eax
+    jnz .done
+    movzx esi, byte [rbx + CM_NICK_LEN]
+    test esi, esi
+    jz .done
+    lea rdi, [rbx + CM_NICK]
+    call name_matches
+.done:
+    pop rbx
+    ret
+
+; -> eax = how many members the search box lets through
+shown_members:
+    push rbx
+    push r12
+    sub rsp, 8
+    lea rbx, [members]
+    mov r12d, [member_count]
+    xor eax, eax
+    mov [rsp], eax
+.member:
+    test r12d, r12d
+    jz .done
+    mov rdi, rbx
+    call member_matches
+    add [rsp], eax
+    add rbx, CM_SIZE
+    dec r12d
+    jmp .member
+.done:
+    mov eax, [rsp]
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
 ; A text link at a right edge, red once it's been clicked to ask.
 ; edi = right edge, esi = baseline, rdx = text, ecx = length, r8 = the asking
 ; text, r9d = its length, then on the stack the action and its arg -> eax = its left x
@@ -204,8 +481,9 @@ draw_member_link:
     mov eax, [rsp + 40]
     cmp eax, [member_armed]
     jne .plain
-    cmp dword [rsp + 32], A_SET_ROLE        ; only Remove and Leave ask
-    je .plain
+    mov eax, [rsp + 32]
+    cmp eax, [armed_action]
+    jne .plain
     mov rdx, r8
     mov ecx, r9d
     mov r8d, C_DANGER
@@ -226,86 +504,127 @@ draw_member_link:
     pop rbx
     ret
 
-; One member: avatar, name, role, and what we may do to them.
-; rdi = member row, esi = x, edx = top, ecx = 1 if we own the team
-draw_member_row:
+; Leave for us, Remove for whoever we can kick, and Manage for whoever's
+; page has something we can change, ours included.
+; rdi = member row, esi = right edge, edx = baseline -> eax = where what's
+; left of them has to end
+draw_member_actions:
     push rbx
-    push rbp
     push r12
     push r13
-    push r14
-    push r15
-    sub rsp, 24
+    sub rsp, 16
     mov rbx, rdi
     mov r12d, esi
     mov r13d, edx
-    mov ebp, ecx
-    lea edi, [r12d + 28]
-    lea esi, [r13d + 10]
-    mov edx, 24
-    mov ecx, [rbx + CM_ID]
-    lea r8, [rbx + CM_NAME]
-    call draw_avatar
-    lea r14d, [r12d + SETTINGS_W - 28]      ; links, from the right
-    lea r15d, [r13d + 27]                   ; baseline
     mov eax, [rbx + CM_ID]
     cmp eax, [my_id]
     jne .others
     mov dword [rsp], A_LEAVE
     mov [rsp + 8], eax
-    mov edi, r14d
-    mov esi, r15d
+    mov edi, r12d
+    mov esi, r13d
     lea rdx, [s_leave_team]
     mov ecx, s_leave_team_len
     lea r8, [s_leave_sure]
     mov r9d, s_leave_sure_len
     call draw_member_link
-    mov r14d, eax
-    jmp .role
+    lea r12d, [eax - 16]
+    jmp .manage
 .others:
-    test ebp, ebp
-    jz .role
+    mov rdi, rbx
+    mov esi, PERM_KICK
+    call may_act_on
+    test eax, eax
+    jz .manage
     mov dword [rsp], A_REMOVE
+    mov eax, [rbx + CM_ID]
     mov [rsp + 8], eax
-    mov edi, r14d
-    mov esi, r15d
+    mov edi, r12d
+    mov esi, r13d
     lea rdx, [s_remove]
     mov ecx, s_remove_len
     lea r8, [s_remove_sure]
     mov r9d, s_remove_sure_len
     call draw_member_link
-    lea r14d, [eax - 16]
-    mov dword [rsp], A_SET_ROLE
+    lea r12d, [eax - 16]
+.manage:
+    mov rdi, rbx
+    call can_manage
+    test eax, eax
+    jz .none
     mov eax, [rbx + CM_ID]
     mov [rsp + 8], eax
-    lea rdx, [s_make_owner]
-    mov ecx, s_make_owner_len
-    lea rax, [s_make_member]
-    mov r9d, s_make_member_len
-    cmp byte [rbx + CM_ROLE], ROLE_OWNER
-    cmove rdx, rax
-    cmove ecx, r9d
+    mov edi, r12d
+    mov dword [rsp], A_MANAGE
+    mov esi, r13d
+    lea rdx, [s_manage]
+    mov ecx, s_manage_len
+    lea r8, [s_manage]
+    mov r9d, s_manage_len
+    call draw_member_link
+    lea r12d, [eax - 16]
+.none:
+    mov eax, r12d
+    add rsp, 16
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; One member: avatar, name, role, whether they're timed out, and what we may do.
+; rdi = member row, esi = x, edx = top
+draw_member_row:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    mov rdi, rbx
+    call display_name
+    mov r8, rsi
+    lea edi, [r12d + 28]
+    lea esi, [r13d + 10]
+    mov edx, 24
+    mov ecx, [rbx + CM_ID]
+    call draw_avatar
+    lea r15d, [r13d + 27]                   ; baseline
+    mov rdi, rbx
+    lea esi, [r12d + SETTINGS_W - 28]
+    mov edx, r15d
+    call draw_member_actions
+    mov r14d, eax
+    mov rdi, rbx
+    call member_timed_out
+    test eax, eax
+    jz .role
     mov edi, r14d
     mov esi, r15d
-    call draw_member_link
-    mov r14d, eax
+    lea rdx, [s_timed_out]
+    mov ecx, s_timed_out_len
+    mov r8d, C_DANGER
+    call draw_link
+    lea r14d, [eax - 12]
 .role:
-    lea edi, [r14d - 20]
+    lea rdi, [scratch]
+    mov rsi, rbx
+    call put_rank_name
+    lea rdx, [scratch]
+    mov rcx, rdi
+    sub rcx, rdx
+    mov edi, r14d
     mov esi, r15d
-    lea rdx, [s_role_member]
-    mov ecx, s_role_member_len
-    lea rax, [s_role_owner]
-    mov r8d, s_role_owner_len
-    cmp byte [rbx + CM_ROLE], ROLE_OWNER
-    cmove rdx, rax
-    cmove ecx, r8d
     mov r8d, C_FAINT
     call draw_link
     lea r14d, [eax - 16]                    ; where the name has to stop
+    mov rdi, rbx
+    call display_name
+    mov ecx, edx
+    mov rdx, rsi
     lea edi, [r12d + 62]
     mov esi, r15d
-    lea rdx, [rbx + CM_NAME]
-    movzx ecx, byte [rbx + CM_NAME_LEN]
     mov r8d, INK(C_TEXT, ST_BODY)
     mov r9d, r14d
     sub r9d, edi
@@ -313,8 +632,10 @@ draw_member_row:
     mov eax, [rbx + CM_ID]
     cmp eax, [my_id]
     jne .done
-    lea rdi, [rbx + CM_NAME]
-    movzx esi, byte [rbx + CM_NAME_LEN]
+    mov rdi, rbx
+    call display_name
+    mov rdi, rsi
+    mov esi, edx
     mov edx, ST_BODY
     call text_width
     lea edi, [r12d + 62 + 6]
@@ -325,8 +646,53 @@ draw_member_row:
     mov r8d, INK(C_FAINT, ST_BODY)
     call draw_text
 .done:
-    add rsp, 24
     pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; The members the search lets through, or a line saying there are none.
+; edi = x, esi = top
+draw_member_list:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    mov ebx, edi
+    mov r12d, esi
+    xor ebp, ebp                            ; rows drawn
+    lea r13, [members]
+    mov r14d, [member_count]
+.member:
+    test r14d, r14d
+    jz .listed
+    mov rdi, r13
+    call member_matches
+    test eax, eax
+    jz .next
+    mov rdi, r13
+    mov esi, ebx
+    mov edx, r12d
+    call draw_member_row
+    add r12d, MEMBER_ROW_H
+    inc ebp
+.next:
+    add r13, CM_SIZE
+    dec r14d
+    jmp .member
+.listed:
+    test ebp, ebp
+    jnz .done
+    lea edi, [ebx + 28]
+    lea esi, [r12d + 26]
+    lea rdx, [s_no_match]
+    mov ecx, s_no_match_len
+    mov r8d, INK(C_DIM, ST_BODY)
+    call draw_text
+.done:
     pop r14
     pop r13
     pop r12
@@ -334,8 +700,9 @@ draw_member_row:
     pop rbx
     ret
 
-; Owners get a field and a button side by side. edi = field, esi = x,
-; edx = y, rcx = button text, r8d = its length, r9d = button action
+; A field and a button side by side, the button at the right edge.
+; edi = field, esi = x, edx = y, rcx = button text, r8d = its length,
+; r9d = button action, r10d = how wide the two are together
 draw_field_with_button:
     push rbx
     push r12
@@ -348,13 +715,23 @@ draw_field_with_button:
     mov r14, rcx
     mov r15d, r8d
     push r9
-    sub rsp, 8
+    push r10
+    mov rdi, r14
+    mov esi, r15d
+    mov edx, ST_MEDIUM
+    call text_width
+    add eax, 24                             ; as wide as draw_button makes it
+    mov [rsp + 4], eax                      ; over r10's high half, which is 0
     mov edi, ebx
     mov esi, r12d
     mov edx, r13d
-    mov ecx, SETTINGS_W - 56 - 96
+    mov ecx, [rsp]
+    sub ecx, 12
+    sub ecx, eax
     call draw_field_box
-    lea edi, [r12d + SETTINGS_W - 56 - 84]
+    mov edi, r12d
+    add edi, [rsp]
+    sub edi, [rsp + 4]
     lea esi, [r13d + 3]
     mov rdx, r14
     mov ecx, r15d
@@ -369,8 +746,9 @@ draw_field_with_button:
     pop rbx
     ret
 
-; The dialog. Its member list scrolls when the window can't fit it.
-draw_team_settings:
+; The tabs our permissions get us, the open one underlined. edi = the dialog's x,
+; esi = the tabs' baseline
+draw_settings_tabs:
     push rbx
     push rbp
     push r12
@@ -378,30 +756,81 @@ draw_team_settings:
     push r14
     push r15
     sub rsp, 8
-    call am_owner
-    mov ebp, eax
-    mov r14d, 176                           ; above the member list
-    mov eax, 228
-    test ebp, ebp
-    cmovnz r14d, eax
-    mov r15d, [member_count]
-    imul r15d, r15d, MEMBER_ROW_H           ; the whole list
-    mov eax, [win_h]
-    sub eax, 80 + 40 + 52
-    sub eax, r14d                           ; the room for it
-    cmp eax, MEMBER_ROW_H
-    jge .room
-    mov eax, MEMBER_ROW_H
-.room:
-    cmp eax, r15d
-    cmovg eax, r15d
-    mov [rsp], eax                          ; the list's window
-    lea esi, [r14d + eax + 52]
-    mov r13d, esi
-    mov edi, SETTINGS_W
-    call modal_box
-    mov ebx, eax
-    mov r12d, edx
+    mov ebx, edi
+    mov r12d, esi
+    lea edi, [ebx + 28]
+    lea esi, [r12d + 11]
+    mov edx, SETTINGS_W - 56
+    mov ecx, 1
+    mov r8d, C_LINE
+    call fill_rect
+    lea r13d, [ebx + 28]                    ; the next tab's x
+    xor ebp, ebp
+.tab:
+    mov edi, ebp
+    call tab_shown
+    test eax, eax
+    jz .next
+    mov r14d, ebp
+    shl r14d, 4
+    mov rdi, [tab_names + r14]
+    mov esi, [tab_names + r14 + 8]
+    mov edx, ST_MEDIUM
+    call text_width
+    mov r15d, eax
+    mov edi, A_TAB
+    mov esi, ebp
+    call hovering
+    mov r8d, INK(C_DIM, ST_MEDIUM)
+    mov ecx, INK(C_TEXT, ST_MEDIUM)
+    cmp ebp, [settings_tab]
+    sete dl
+    or al, dl
+    test al, al
+    cmovnz r8d, ecx
+    mov edi, r13d
+    mov esi, r12d
+    mov rdx, [tab_names + r14]
+    mov ecx, [tab_names + r14 + 8]
+    call draw_text
+    cmp ebp, [settings_tab]
+    jne .hit
+    mov edi, r13d
+    lea esi, [r12d + 10]
+    mov edx, r15d
+    mov ecx, 2
+    mov r8d, C_ACCENT
+    call fill_rect
+.hit:
+    mov edi, r13d
+    lea esi, [r12d - 18]
+    mov edx, r15d
+    mov ecx, 30
+    mov r8d, A_TAB
+    mov r9d, ebp
+    call add_hit
+    lea r13d, [r13d + r15d + 24]
+.next:
+    inc ebp
+    cmp ebp, TAB_COUNT
+    jb .tab
+    add rsp, 8
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    ret
+
+; The title, the team's name, and the tabs if we get any besides the members.
+; edi = the dialog's x, esi = its y
+draw_settings_head:
+    push rbx
+    push r12
+    push r13
+    mov ebx, edi
+    mov r12d, esi
     lea edi, [ebx + 28]
     lea esi, [r12d + 46]
     lea rdx, [s_settings_title]
@@ -414,7 +843,9 @@ draw_team_settings:
     mov ecx, s_team_name_label_len
     mov r8d, INK(C_DIM, ST_SMALL)
     call draw_text
-    test ebp, ebp
+    mov edi, PERM_MANAGE_TEAM
+    call has_perm
+    test eax, eax
     jz .name_text
     mov edi, F_TEAM_RENAME
     lea esi, [ebx + 28]
@@ -422,44 +853,249 @@ draw_team_settings:
     lea rcx, [s_save]
     mov r8d, s_save_len
     mov r9d, A_SAVE_TEAM_NAME
+    mov r10d, SETTINGS_W - 56
     call draw_field_with_button
-    jmp .members
+    jmp .tabs
 .name_text:
     call current_team_row
     test rax, rax
-    jz .members
+    jz .tabs
     lea edi, [ebx + 28]
     lea esi, [r12d + 118]
     lea rdx, [rax + CO_NAME]
     movzx ecx, byte [rax + CO_NAME_LEN]
     mov r8d, INK(C_TEXT, ST_BODY)
     call draw_text
-.members:
-    lea edi, [ebx + 28]
-    lea esi, [r12d + 162]
-    test ebp, ebp
+.tabs:
+    call any_tabs
+    test eax, eax
     jz .heading
-    add esi, 4
+    mov edi, ebx
+    lea esi, [r12d + 166]
+    call draw_settings_tabs
+    jmp .done
 .heading:
+    lea edi, [ebx + 28]
+    lea esi, [r12d + 166]
     lea rdx, [s_members]
     mov ecx, s_members_len
     mov r8d, INK(C_DIM, ST_SMALL)
     call draw_text
-    test ebp, ebp
-    jz .list
+.done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; The fields above the member list: inviting, for those who can, and the
+; search. edi = the dialog's x, esi = its y
+draw_settings_fields:
+    push rbx
+    push r12
+    sub rsp, 8
+    cmp dword [settings_tab], TAB_MEMBERS
+    jne .done
+    cmp dword [managing], 0
+    jne .done
+    mov ebx, edi
+    lea r12d, [esi + CONTENT_TOP]
+    mov edi, PERM_INVITE
+    call has_perm
+    test eax, eax
+    jz .search
     mov edi, F_MEMBER
     lea esi, [ebx + 28]
-    lea edx, [r12d + 178]
+    mov edx, r12d
     lea rcx, [s_invite]
     mov r8d, s_invite_len
     mov r9d, A_INVITE
+    mov r10d, SETTINGS_W - 56
     call draw_field_with_button
-.list:
+    add r12d, FIELD_ROW_H
+.search:
+    mov edi, F_SEARCH
+    lea esi, [ebx + 28]
+    mov edx, r12d
+    mov ecx, SETTINGS_W - 56
+    call draw_field_box
+.done:
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
+; -> eax = how far down the dialog the scrolled part starts, edx = its whole height
+settings_layout:
+    push rbx
+    mov ebx, CONTENT_TOP
+    mov eax, [settings_tab]
+    cmp eax, TAB_ROLES
+    je .roles
+    cmp eax, TAB_AUTOMOD
+    je .automod
+    cmp eax, TAB_MEMBERS
+    jne .entries
+    mov edi, [managing]
+    test edi, edi
+    jnz .page
+    mov edi, PERM_INVITE
+    call has_perm
+    imul eax, eax, FIELD_ROW_H
+    lea ebx, [ebx + eax + FIELD_ROW_H]      ; the invite box for some, the search for all
+    call shown_members
+    imul edx, eax, MEMBER_ROW_H
+    jmp .at_least_a_row
+.page:
+    call find_member_row
+    mov edx, MEMBER_ROW_H
+    test rax, rax
+    jz .done
+    mov rdi, rax
+    call page_height
+    mov edx, eax
+    jmp .done
+.roles:
+    call roles_tab_height
+    mov edx, eax
+    jmp .done
+.automod:
+    call automod_tab_height
+    mov edx, eax
+    jmp .done
+.entries:
+    mov eax, [ban_count]
+    cmp dword [settings_tab], TAB_AUDIT
+    cmove eax, [audit_count]
+    imul edx, eax, LIST_ROW_H
+.at_least_a_row:
+    mov eax, MEMBER_ROW_H                   ; for the line saying there's nothing
+    cmp edx, eax
+    cmovl edx, eax
+.done:
+    mov eax, ebx
+    pop rbx
+    ret
+
+; Whichever list or page the dialog shows. edi = the dialog's x, esi = the top
+draw_settings_body:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov ebx, edi
+    mov r12d, esi
+    mov eax, [settings_tab]
+    cmp eax, TAB_ROLES
+    je .roles
+    cmp eax, TAB_AUTOMOD
+    je .automod
+    cmp eax, TAB_BANS
+    je .bans
+    cmp eax, TAB_AUDIT
+    je .audit
+    mov edi, [managing]
+    test edi, edi
+    jz .members
+    call find_member_row
+    test rax, rax
+    jz .done
+    mov rdx, rax
+    mov edi, ebx
+    mov esi, r12d
+    call draw_member_page
+    jmp .done
+.members:
+    mov edi, ebx
+    mov esi, r12d
+    call draw_member_list
+    jmp .done
+.roles:
+    mov edi, ebx
+    mov esi, r12d
+    call draw_roles_tab
+    jmp .done
+.automod:
+    mov edi, ebx
+    mov esi, r12d
+    call draw_automod_tab
+    jmp .done
+.bans:
+    mov edi, ebx
+    mov esi, r12d
+    call draw_bans
+    jmp .done
+.audit:
+    mov edi, ebx
+    mov esi, r12d
+    call draw_audit
+.done:
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
+; The tab's hint at the bottom. Without tabs there's only the list, so none.
+; edi = x, esi = baseline
+draw_settings_hint:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov ebx, edi
+    mov r12d, esi
+    call any_tabs
+    test eax, eax
+    jz .done
+    mov eax, [settings_tab]
+    shl eax, 4
+    mov edi, ebx
+    mov esi, r12d
+    mov rdx, [tab_hints + rax]
+    mov ecx, [tab_hints + rax + 8]
+    mov r8d, INK(C_FAINT, ST_SMALL)
+    call draw_text
+.done:
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
+; The dialog. Its list or page scrolls when the window can't fit it.
+draw_team_settings:
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 16
+    call settings_layout
+    mov r14d, eax                           ; above the scrolled part
+    mov r15d, edx                           ; all of it
+    mov eax, [win_h]
+    sub eax, 80 + 40 + 52
+    sub eax, r14d                           ; the room for it
+    cmp eax, MEMBER_ROW_H
+    jge .room
+    mov eax, MEMBER_ROW_H
+.room:
+    cmp eax, r15d
+    cmovg eax, r15d
+    mov [rsp], eax                          ; the scrolled part's window
+    lea esi, [r14d + eax + 52]
+    mov r13d, esi
+    mov edi, SETTINGS_W
+    call modal_box
+    mov ebx, eax
+    mov r12d, edx
+    mov edi, ebx
+    mov esi, r12d
+    call draw_settings_head
+    mov edi, ebx
+    mov esi, r12d
+    call draw_settings_fields
     lea rdi, [settings_scroll]
     mov esi, [rsp]
     mov edx, r15d
     call clamp_scroll_to
-    add r14d, r12d                          ; the list's top
+    add r14d, r12d                          ; the scrolled part's top
     mov edi, ebx
     mov esi, r14d
     lea edx, [ebx + SETTINGS_W]
@@ -467,37 +1103,17 @@ draw_team_settings:
     add ecx, r14d
     call set_clip
     sub r14d, [settings_scroll]
-    lea r15, [members]
-    mov eax, [member_count]
-    mov [rsp + 4], eax
-.member:
-    cmp dword [rsp + 4], 0
-    je .listed
-    mov rdi, r15
-    mov esi, ebx
-    mov edx, r14d
-    mov ecx, ebp
-    call draw_member_row
-    add r14d, MEMBER_ROW_H
-    add r15, CM_SIZE
-    dec dword [rsp + 4]
-    jmp .member
-.listed:
+    mov edi, ebx
+    mov esi, r14d
+    call draw_settings_body
     call reset_clip
     lea edi, [ebx + 28]
     lea esi, [r12d + r13d - 22]
-    lea rdx, [s_settings_hint]
-    mov ecx, s_settings_hint_len
-    mov r8d, INK(C_FAINT, ST_SMALL)
-    test ebp, ebp
-    jz .done
-    call draw_text
-.done:
-    add rsp, 8
+    call draw_settings_hint
+    add rsp, 16
     pop r15
     pop r14
     pop r13
     pop r12
-    pop rbp
     pop rbx
     ret

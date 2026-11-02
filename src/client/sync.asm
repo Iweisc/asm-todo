@@ -29,7 +29,11 @@
 %define CM_ONLINE       5
 %define CM_NAME_LEN     6
 %define CM_NAME         7
-%define CM_SIZE         40
+%define CM_TIMEOUT      40              ; unix seconds they're timed out until, 0 for not
+%define CM_ROLES        44              ; u16, bit n = role slot n
+%define CM_NICK_LEN     46
+%define CM_NICK         47              ; NICKNAME_MAX bytes, see display_name
+%define CM_SIZE         80
 
 ; Labels and projects: u32 color, u8 name length, name. Empty means unused.
 %define LB_COLOR        0
@@ -104,7 +108,10 @@
 
 fits CO_KEY, TEAM_KEY_MAX, CO_NAME_LEN
 fits CO_NAME, TEAMNAME_MAX, CO_SIZE
-fits CM_NAME, USERNAME_MAX, CM_SIZE
+fits CM_NAME, USERNAME_MAX, CM_TIMEOUT
+fits CM_TIMEOUT, 4, CM_ROLES
+fits CM_ROLES, 2, CM_NICK_LEN
+fits CM_NICK, NICKNAME_MAX, CM_SIZE
 fits LB_NAME, LABEL_NAME_MAX, LB_SIZE
 fits LB_NAME, PROJECT_NAME_MAX, PJ_SIZE
 fits CI_TITLE, TITLE_MAX, CI_PENDING
@@ -129,9 +136,20 @@ fits RI_H, 2, RI_SIZE
 
 section .rodata
 text st_gone,       "someone deleted that issue first"
-text st_forbidden,  "you're not a member of that team anymore"
+text st_forbidden,  "you don't have permission to do that in this team"
 text st_invalid,    "the server refused that change"
 text st_full,       "that's over the limit for this team"
+text st_timed_out,  "you're timed out in this team, so you can only read for now"
+text st_slowmode,   "slowmode is on in this channel, wait a little before sending another message"
+text st_blocked,    "AutoMod blocked that, it has a word this team doesn't allow"
+align 8
+ack_texts:      dq st_gone, st_gone_len             ; by ACK_* - 1
+                dq st_forbidden, st_forbidden_len
+                dq st_invalid, st_invalid_len
+                dq st_full, st_full_len
+                dq st_timed_out, st_timed_out_len
+                dq st_slowmode, st_slowmode_len
+                dq st_blocked, st_blocked_len
 text st_queue_full, "too many unsynced changes, wait for the connection to come back"
 text st_offline,    "you're offline, try again once reconnected"
 text st_no_server,  "can't reach the server yet"
@@ -304,6 +322,10 @@ clear_team_view:
     mov [unread_count], eax
     mov [mention_marks], eax
     mov [chan_count], eax
+    mov [ban_count], eax
+    mov [audit_count], eax
+    mov [role_count], eax
+    mov [everyone_perms], eax
     lea rdi, [labels]
     mov ecx, LABEL_SLOTS * LB_SIZE + PROJECT_SLOTS * PJ_SIZE  ; projects follows labels
     rep stosb
@@ -373,7 +395,7 @@ sync_on_message:
     call rd_begin
     call rd_u8
     sub eax, MSG_AUTH_OK
-    cmp eax, MSG_UPLOAD_READY - MSG_AUTH_OK
+    cmp eax, MSG_AUTOMOD - MSG_AUTH_OK
     ja .bad
     lea rcx, [.table]
     call [rcx + rax * 8]
@@ -392,7 +414,8 @@ sync_on_message:
     dq on_auth_ok, on_auth_fail, on_error, on_teams, on_snapshot, on_event
     dq on_ack, on_members, on_logged_out, on_team_meta, on_issue_detail
     dq on_chat, on_chat_history, on_unread, on_password_changed, on_channels
-    dq on_chat_edited, on_chat_deleted, on_image, on_upload_ready
+    dq on_chat_edited, on_chat_deleted, on_image, on_upload_ready, on_bans, on_audit
+    dq on_roles, on_automod
 
 on_auth_ok:
     push rbx
@@ -1092,21 +1115,13 @@ on_ack:
 .status:
     test r12d, r12d
     jz .rebuild
-    lea rsi, [st_gone]
-    mov edx, st_gone_len
-    cmp r12d, ACK_GONE
-    je .show
-    lea rsi, [st_forbidden]
-    mov edx, st_forbidden_len
-    cmp r12d, ACK_FORBIDDEN
-    je .show
-    lea rsi, [st_full]
-    mov edx, st_full_len
-    cmp r12d, ACK_FULL
-    je .show
-    lea rsi, [st_invalid]
-    mov edx, st_invalid_len
-.show:
+    cmp r12d, ACK_BLOCKED
+    jbe .known
+    mov r12d, ACK_INVALID
+.known:
+    shl r12d, 4
+    mov rsi, [ack_texts + r12 - 16]
+    mov edx, [ack_texts + r12 - 8]
     call set_status
 .rebuild:
     call rebuild_view
@@ -1140,6 +1155,13 @@ on_members:
     mov [rbx + CM_ONLINE], al
     lea rdi, [rbx + CM_NAME_LEN]
     mov esi, USERNAME_MAX
+    call read_named_str
+    call rd_u32
+    mov [rbx + CM_TIMEOUT], eax
+    call rd_u16
+    mov [rbx + CM_ROLES], ax
+    lea rdi, [rbx + CM_NICK_LEN]
+    mov esi, NICKNAME_MAX
     call read_named_str
     add rbx, CM_SIZE
     inc r13d
@@ -1550,24 +1572,13 @@ sync_add_member:
 .done:
     ret
 
-; edi = user id, yourself to leave
+; edi = user id, yourself to leave, rsi = reason, edx = its length -> eax = 1 if it went out
 sync_remove_member:
-    push rdi
-    call require_online
-    pop rdi
-    test eax, eax
-    jz .done
-    push rdi
-    lea rdi, [out_msg]
-    mov esi, MSG_REMOVE_MEMBER
-    call wr_u8
-    mov esi, [current_team]
-    call wr_u32
-    pop rsi
-    call wr_u32
-    call send_built
-.done:
-    ret
+    mov ecx, edx
+    mov rdx, rsi
+    mov esi, edi
+    mov edi, MSG_REMOVE_MEMBER
+    jmp sync_moderate
 
 ; edi = team id
 sync_select_team:

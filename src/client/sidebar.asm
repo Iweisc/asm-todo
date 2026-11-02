@@ -589,7 +589,7 @@ draw_side_projects:
     ret
 
 ; Everyone else on the team, each row opening a conversation with them.
-; Owners get a "+" to invite people, and an invite row while they're alone.
+; Owners and moderators get a "+" to invite people, and an invite row while they're alone.
 ; edi = top -> eax = the y under them
 draw_side_members:
     push rbx
@@ -600,7 +600,8 @@ draw_side_members:
     push r15
     sub rsp, 8
     lea ebx, [edi + 12]
-    call am_owner
+    mov edi, PERM_INVITE
+    call has_perm
     mov ebp, eax
     mov edi, ebx
     lea rsi, [s_direct_messages]

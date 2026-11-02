@@ -41,6 +41,43 @@ rate_ip:            resd RATE_SLOTS
 rate_count:         resd RATE_SLOTS
 rate_start:         resq RATE_SLOTS
 
+section .rodata
+; Handlers for the messages that need a login, by type from MSG_LOGOUT.
+; Types without one are 0.
+%macro handler 2
+    times (%1 - MSG_LOGOUT) * 8 - ($ - msg_handlers) db 0
+    dq %2
+%endmacro
+align 8
+msg_handlers:
+    handler MSG_LOGOUT, h_logout
+    handler MSG_CHANGE_PASSWORD, h_change_password
+    handler MSG_CREATE_TEAM, h_create_team
+    handler MSG_ADD_MEMBER, h_add_member
+    handler MSG_REMOVE_MEMBER, h_remove_member
+    handler MSG_SUBSCRIBE, h_subscribe
+    handler MSG_OPEN_ISSUE, h_open_issue
+    handler MSG_OPEN_CHAT, h_open_chat
+    handler MSG_SET_ROLE, h_set_role
+    handler MSG_RENAME_TEAM, h_rename_team
+    handler MSG_SET_CHANNEL, h_set_channel
+    handler MSG_EDIT_MESSAGE, h_edit_message
+    handler MSG_DELETE_MESSAGE, h_delete_message
+    handler MSG_UPLOAD_IMAGE, h_upload_image
+    handler MSG_IMAGE_PART, h_image_part
+    handler MSG_GET_IMAGE, h_get_image
+    handler MSG_BAN, h_ban
+    handler MSG_UNBAN, h_unban
+    handler MSG_OP, h_op
+    handler MSG_TIMEOUT, h_timeout
+    handler MSG_SAVE_ROLE, h_save_role
+    handler MSG_MOVE_ROLE, h_move_role
+    handler MSG_MEMBER_ROLES, h_member_roles
+    handler MSG_NICKNAME, h_nickname
+    handler MSG_CHANNEL_SETTINGS, h_channel_settings
+    handler MSG_SET_AUTOMOD, h_set_automod
+MSG_HANDLERS equ ($ - msg_handlers) / 8
+
 section .text
 
 ; edi = index, rsi = plaintext, rdx = length
@@ -64,48 +101,22 @@ handle_message:
     je .resume
     cmp dword [rbx + C_USER], 0
     je .anonymous
-    cmp eax, MSG_LOGOUT
-    je .logout
-    cmp eax, MSG_CHANGE_PASSWORD
-    je .change_password
-    cmp eax, MSG_CREATE_TEAM
-    je .create_team
-    cmp eax, MSG_ADD_MEMBER
-    je .add_member
-    cmp eax, MSG_REMOVE_MEMBER
-    je .remove_member
-    cmp eax, MSG_SUBSCRIBE
-    je .subscribe
-    cmp eax, MSG_OPEN_ISSUE
-    je .open_issue
-    cmp eax, MSG_OPEN_CHAT
-    je .open_chat
-    cmp eax, MSG_SET_ROLE
-    je .set_role
-    cmp eax, MSG_RENAME_TEAM
-    je .rename_team
-    cmp eax, MSG_SET_CHANNEL
-    je .set_channel
-    cmp eax, MSG_EDIT_MESSAGE
-    je .edit_message
-    cmp eax, MSG_DELETE_MESSAGE
-    je .delete_message
-    cmp eax, MSG_UPLOAD_IMAGE
-    je .upload_image
-    cmp eax, MSG_IMAGE_PART
-    je .image_part
-    cmp eax, MSG_GET_IMAGE
-    je .get_image
-    cmp eax, MSG_OP
-    je .op
+    sub eax, MSG_LOGOUT
+    cmp eax, MSG_HANDLERS
+    jae .violation
+    mov rax, [msg_handlers + rax * 8]
+    test rax, rax
+    jz .violation
+    call rax
+    jmp .done
 .violation:
     or byte [rbx + C_FLAGS], F_KILL
     jmp .done
 .anonymous:
     cmp eax, MSG_LOGOUT
     jb .violation
-    cmp eax, MSG_OP
-    ja .violation
+    cmp eax, MSG_LOGOUT + MSG_HANDLERS
+    jae .violation
     lea rsi, [e_log_in_first]
     mov edx, e_log_in_first_len
     call send_error
@@ -118,57 +129,6 @@ handle_message:
     jmp .done
 .resume:
     call h_resume
-    jmp .done
-.logout:
-    call h_logout
-    jmp .done
-.change_password:
-    call h_change_password
-    jmp .done
-.create_team:
-    call h_create_team
-    jmp .done
-.add_member:
-    call h_add_member
-    jmp .done
-.remove_member:
-    call h_remove_member
-    jmp .done
-.subscribe:
-    call h_subscribe
-    jmp .done
-.open_issue:
-    call h_open_issue
-    jmp .done
-.open_chat:
-    call h_open_chat
-    jmp .done
-.set_role:
-    call h_set_role
-    jmp .done
-.rename_team:
-    call h_rename_team
-    jmp .done
-.set_channel:
-    call h_set_channel
-    jmp .done
-.edit_message:
-    call h_edit_message
-    jmp .done
-.delete_message:
-    call h_delete_message
-    jmp .done
-.upload_image:
-    call h_upload_image
-    jmp .done
-.image_part:
-    call h_image_part
-    jmp .done
-.get_image:
-    call h_get_image
-    jmp .done
-.op:
-    call h_op
 .done:
     pop rbx
     ret

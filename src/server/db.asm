@@ -1,5 +1,7 @@
 ; The server's state: users, teams, memberships, issues, comments,
-; sessions, messages and seen marks, held in fixed-size tables of slots.
+; sessions, messages, seen marks, channels, images, bans, the audit log,
+; roles, channel settings, nicknames and AutoMod's rules, held in fixed-size
+; tables of slots.
 ;
 ; On disk it's a snapshot plus a journal. Handlers mark the rows they change
 ; with db_touch, and db_commit appends those rows to <db>.log as one batch and
@@ -51,7 +53,9 @@
 
 %define MEM_TEAM        0               ; 0 marks a free slot
 %define MEM_USER        4
-%define MEM_ROLE        8
+%define MEM_ROLE        8               ; u8, ROLE_OWNER or ROLE_MEMBER
+%define MEM_ROLES       10              ; u16, bit n = role slot n
+%define MEM_TIMEOUT     12              ; unix seconds they're timed out until, 0 for not
 %define MEM_SIZE        16
 
 %define ISS_ID          0               ; 0 marks a free slot
@@ -107,6 +111,9 @@
 %define SEEN_SIZE       16
 
 fits USER_NAME, USERNAME_MAX, USER_SALT
+fits MEM_ROLE, 1, MEM_ROLES
+fits MEM_ROLES, 2, MEM_TIMEOUT
+fits MEM_TIMEOUT, 4, MEM_SIZE
 fits USER_SALT, 16, USER_HASH
 fits USER_HASH, 32, USER_SIZE
 fits LABEL_NAME, LABEL_NAME_MAX, LABEL_SIZE
@@ -153,6 +160,64 @@ fits IMG_WIDTH, 2, IMG_HEIGHT
 fits IMG_HEIGHT, 2, IMG_KIND
 fits IMG_KIND, 1, IMG_SIZE
 
+; Someone banned from a team, who can't be invited back until unbanned.
+%define BAN_TEAM        0               ; 0 marks a free slot
+%define BAN_USER        4
+%define BAN_AT          8
+%define BAN_REASON_LEN  12
+%define BAN_REASON      13              ; REASON_MAX bytes
+%define BAN_SIZE        116
+fits BAN_REASON, REASON_MAX, BAN_SIZE
+
+; What owners and moderators did, see moderation.asm.
+%define AUD_TEAM        0               ; 0 marks a free slot
+%define AUD_SEQ         4               ; counts up across every team, so the newest is the highest
+%define AUD_ACTOR       8
+%define AUD_TARGET      12
+%define AUD_AT          16
+%define AUD_EXTRA       20
+%define AUD_KIND        24              ; u8, AU_*
+%define AUD_REASON_LEN  25
+%define AUD_REASON      26              ; REASON_MAX bytes
+%define AUD_SIZE        128
+fits AUD_KIND, 1, AUD_REASON_LEN
+fits AUD_REASON, REASON_MAX, AUD_SIZE
+
+; A team's role, see roles.asm. Slot 0 is @everyone, which a team without
+; that row has with PERM_EVERYONE.
+%define RL_TEAM         0               ; 0 marks a free slot
+%define RL_COLOR        4
+%define RL_PERMS        8
+%define RL_SLOT         12
+%define RL_POS          13              ; 1 is the lowest, unique in the team. 0 for @everyone.
+%define RL_NAME_LEN     14
+%define RL_NAME         15              ; ROLE_NAME_MAX bytes
+%define RL_SIZE         40
+fits RL_NAME, ROLE_NAME_MAX, RL_SIZE
+
+; A channel's slowmode and overrides, only once they're set. Slot 0 is #general.
+%define CC_TEAM         0               ; 0 marks a free slot
+%define CC_SLOWMODE     4               ; u16 seconds
+%define CC_SLOT         6
+%define CC_OVERRIDES    7               ; ROLE_SLOTS + 1 bytes, @everyone's first
+%define CC_SIZE         24
+fits CC_OVERRIDES, ROLE_SLOTS + 1, CC_SIZE
+
+%define NICK_TEAM       0               ; 0 marks a free slot
+%define NICK_USER       4
+%define NICK_LEN        8
+%define NICK_TEXT       9               ; NICKNAME_MAX bytes
+%define NICK_SIZE       44
+fits NICK_TEXT, NICKNAME_MAX, NICK_SIZE
+
+; A team's AutoMod rules, see automod.asm.
+%define AM_TEAM         0               ; 0 marks a free slot
+%define AM_TIMEOUT      4               ; seconds a blocked message times its author out for
+%define AM_LEN          8               ; u16
+%define AM_WORDS        10              ; AUTOMOD_MAX bytes, one word per line
+%define AM_SIZE         1012
+fits AM_WORDS, AUTOMOD_MAX, AM_SIZE
+
 %define MAX_USERS       1024
 %define MAX_TEAMS       512
 %define MAX_MEMBERS     8192
@@ -163,6 +228,12 @@ fits IMG_KIND, 1, IMG_SIZE
 %define MAX_SEEN        32768
 %define MAX_CHANNELS    (MAX_TEAMS * CHANNEL_SLOTS)
 %define MAX_IMAGES      4096
+%define MAX_BANS        4096
+%define MAX_AUDIT       16384           ; when full, the oldest entry makes room
+%define MAX_ROLES       (MAX_TEAMS * (ROLE_SLOTS + 1))
+%define MAX_CHANCFG     (MAX_TEAMS * (CHANNEL_SLOTS + 1))
+%define MAX_NICKS       MAX_MEMBERS
+%define MAX_AUTOMOD     MAX_TEAMS
 
 %define T_USERS         0
 %define T_TEAMS         1
@@ -174,6 +245,12 @@ fits IMG_KIND, 1, IMG_SIZE
 %define T_SEEN          7
 %define T_CHANNELS      8
 %define T_IMAGES        9
+%define T_BANS          10
+%define T_AUDIT         11
+%define T_ROLES         12
+%define T_CHANCFG       13
+%define T_NICKS         14
+%define T_AUTOMOD       15
 %define HEADER_TABLES   8               ; the tables whose counts are in the header
 %define T_HEADER        0xff
 
@@ -181,9 +258,12 @@ fits IMG_KIND, 1, IMG_SIZE
 ; Version 2 gave comments CMT_EDITED in bytes that were always zero before,
 ; and version 3 added the channels table after the others, and MS_EDITED,
 ; also in bytes that were always zero. Version 4 added the images table
-; after that. Older files load as they are, without the tables they're
-; older than, and get saved as version 4.
-%define DB_VERSION      4
+; after that. Version 5 gave members MEM_TIMEOUT and MEM_ROLES, in bytes that
+; were always zero, MEM_ROLE was a u32 whose high bytes were zero, and it
+; added the bans, audit, roles, channel settings, nicknames and AutoMod
+; tables. Older files load as they are,
+; without the tables they're older than, and get saved as version 5.
+%define DB_VERSION      5
 %define DB_VERSION_MIN  1
 %define DB_HEADER       96
 %define HEADER_LOGGED   64              ; the part without the private key
@@ -215,7 +295,20 @@ db_tables:
     dq seen,     n_seen,     SEEN_SIZE,  MAX_SEEN
     dq channels, n_channels, CHN_SIZE,   MAX_CHANNELS
     dq images,   n_images,   IMG_SIZE,   MAX_IMAGES
+    dq bans,     n_bans,     BAN_SIZE,   MAX_BANS
+    dq audit,    n_audit,    AUD_SIZE,   MAX_AUDIT
+    dq roles,    n_roles,    RL_SIZE,    MAX_ROLES
+    dq chancfg,  n_chancfg,  CC_SIZE,    MAX_CHANCFG
+    dq nicks,    n_nicks,    NICK_SIZE,  MAX_NICKS
+    dq automod,  n_automod,  AM_SIZE,    MAX_AUTOMOD
 TABLE_COUNT equ ($ - db_tables) / 32
+
+; The version each table first appeared in, for loading older files.
+table_since:
+    db 1, 1, 1, 1, 1, 1, 1, 1, 3, 4, 5, 5, 5, 5, 5, 5
+%if $ - table_since != TABLE_COUNT
+%error "every table needs its version in table_since"
+%endif
 
 section .bss
 
@@ -255,6 +348,12 @@ server_priv:        resb 32                 ; last 32 bytes of the header
 server_pub:         resb 32                 ; derived at startup, never written
 n_channels:         resd 1                  ; kept in the snapshot after the header's tables
 n_images:           resd 1
+n_bans:             resd 1
+n_audit:            resd 1
+n_roles:            resd 1
+n_chancfg:          resd 1
+n_nicks:            resd 1
+n_automod:          resd 1
 
 users:              resb MAX_USERS * USER_SIZE
 teams:              resb MAX_TEAMS * TEAM_SIZE
@@ -266,6 +365,12 @@ messages:           resb MAX_MESSAGES * MS_SIZE
 seen:               resb MAX_SEEN * SEEN_SIZE
 channels:           resb MAX_CHANNELS * CHN_SIZE
 images:             resb MAX_IMAGES * IMG_SIZE
+bans:               resb MAX_BANS * BAN_SIZE
+audit:              resb MAX_AUDIT * AUD_SIZE
+roles:              resb MAX_ROLES * RL_SIZE
+chancfg:            resb MAX_CHANCFG * CC_SIZE
+nicks:              resb MAX_NICKS * NICK_SIZE
+automod:            resb MAX_AUTOMOD * AM_SIZE
 jbuf:               resb JBUF_SIZE
 
 section .text
@@ -398,7 +503,7 @@ db_load:
 .table:
     cmp r13d, HEADER_TABLES
     jb .rows
-    lea eax, [r13d - HEADER_TABLES + 3]     ; each table after them came a version after the last
+    movzx eax, byte [table_since + r13]
     cmp [db_version], eax
     jb .loaded
     mov edi, ebx
