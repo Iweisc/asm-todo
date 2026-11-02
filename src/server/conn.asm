@@ -27,13 +27,17 @@
 %define C_JOB_SALT      176
 %define C_JOB           192             ; PB_SIZE
 %define C_CHAT          (C_JOB + PB_SIZE) ; the open conversation's peer, while F_CHAT is set
-%define CONN_SIZE       512
+%define C_NEW_PASS_LEN  (C_CHAT + 4)    ; byte. A password change waiting on the current one's check
+%define C_NEW_PASS      (C_NEW_PASS_LEN + 1)
+%define CONN_SIZE       1024
 
 fits C_CIPHERS, PAIR_SIZE, C_JOB_NAME_LEN
 fits C_JOB_NAME, USERNAME_MAX, C_JOB_SALT
 fits C_JOB_SALT, 16, C_JOB
 fits C_JOB, PB_SIZE, C_CHAT
-fits C_CHAT, 4, CONN_SIZE
+fits C_CHAT, 4, C_NEW_PASS_LEN
+fits C_NEW_PASS_LEN, 1, C_NEW_PASS
+fits C_NEW_PASS, PASSWORD_MAX, CONN_SIZE
 
 %define ST_FREE         0
 %define ST_HTTP         1
@@ -90,7 +94,7 @@ section .text
 ; edi = index -> rax = connection
 conn_addr:
     mov eax, edi
-    shl rax, 9                              ; * CONN_SIZE
+    shl rax, 10                             ; * CONN_SIZE
     lea rcx, [conns]
     add rax, rcx
     ret

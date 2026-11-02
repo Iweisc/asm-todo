@@ -21,10 +21,15 @@ text c_active,          "Go to active issues"
 text c_backlog,         "Go to backlog"
 text c_mine,            "Go to my issues"
 text c_chat,            "Go to #general"
-text c_filter,          "Filter by label or project"
+text c_filter,          "Filter issues"
 text c_clear,           "Clear filters"
 text c_new_team,        "Create new team"
 text c_log_out,         "Log out"
+text c_copy_id,         "Copy issue ID"
+text c_labels_manage,   "Manage labels and projects"
+text c_password,        "Change password"
+
+%define ISSUE_RESULTS   20              ; issues the command menu lists for a search
 
 text h_status,          "Change status..."
 text h_priority,        "Set priority..."
@@ -59,6 +64,7 @@ commands:
     COMMAND c_assign, CMD_PICK + MK_ASSIGNEE, 'A', WHEN_ISSUE
     COMMAND c_labels, CMD_PICK + MK_LABELS, 'L', WHEN_ISSUE
     COMMAND c_project, CMD_PICK + MK_PROJECT, 'M', WHEN_ISSUE
+    COMMAND c_copy_id, CMD_COPY_ID, 0, WHEN_ISSUE
     COMMAND c_delete, CMD_DELETE, 0, WHEN_ISSUE
     COMMAND c_board, CMD_LAYOUT, 0, WHEN_LIST
     COMMAND c_list, CMD_LAYOUT, 0, WHEN_BOARD
@@ -69,7 +75,9 @@ commands:
     COMMAND c_chat, CMD_CHAT, 0, WHEN_ALWAYS
     COMMAND c_filter, CMD_FILTER, 0, WHEN_ALWAYS
     COMMAND c_clear, CMD_CLEAR, 0, WHEN_FILTERED
+    COMMAND c_labels_manage, CMD_LABELS, 0, WHEN_ALWAYS
     COMMAND c_new_team, CMD_NEW_TEAM, 0, WHEN_ALWAYS
+    COMMAND c_password, CMD_PASSWORD, 0, WHEN_ALWAYS
     COMMAND c_log_out, CMD_LOGOUT, 0, WHEN_ALWAYS
     dq 0
 %define COMMAND_SIZE 24
@@ -234,11 +242,23 @@ choose_item:
 .filter:
     test r12d, r12d
     js .filter_label
+    test r12d, FILTER_ASSIGNEE
+    jnz .filter_assignee
+    test r12d, FILTER_PRIORITY
+    jnz .filter_priority
     mov [filter_project], r12d
     jmp .refilter
 .filter_label:
     not r12d
     mov [filter_label], r12d
+    jmp .refilter
+.filter_assignee:
+    and r12d, ~FILTER_ASSIGNEE
+    mov [filter_assignee], r12d
+    jmp .refilter
+.filter_priority:
+    and r12d, ~FILTER_PRIORITY
+    mov [filter_priority], r12d
 .refilter:
     mov byte [list_dirty], 1
     jmp .close
@@ -312,6 +332,8 @@ push_item:
     jae .skip
     cmp r14d, IC_PLUS
     je .add                                 ; "create" items carry the filter text itself
+    cmp r14d, IC_ISSUE
+    je .add
     mov rdi, rbx
     mov esi, r12d
     call matches_filter
@@ -623,7 +645,8 @@ menu_named_items:
     pop rbx
     ret
 
-; The filter menu's items: labels, then projects. edi is unused, like
+; The filter menu's items: labels, projects, priorities, then who it's
+; assigned to. edi is unused, like
 ; the other item builders take it
 menu_filter_items:
     push rbx
@@ -671,7 +694,48 @@ menu_filter_items:
     inc ebp
     cmp ebp, PROJECT_SLOTS
     jbe .filter_project
-    jmp .out
+    xor ebp, ebp
+.filter_priority:
+    mov edi, ebp
+    call priority_name
+    mov rdi, rsi
+    mov esi, edx
+    lea edx, [ebp + FILTER_PRIORITY]
+    mov ecx, IC_PRIORITY
+    mov r8d, ebp
+    xor r9d, r9d
+    cmp ebp, [filter_priority]
+    sete r9b
+    call push_item
+    inc ebp
+    cmp ebp, PRIO_COUNT
+    jb .filter_priority
+    lea rdi, [s_no_assignee]
+    mov esi, s_no_assignee_len
+    mov edx, FILTER_ASSIGNEE
+    mov ecx, IC_AVATAR
+    xor r8d, r8d
+    xor r9d, r9d
+    cmp dword [filter_assignee], 0
+    sete r9b
+    call push_item
+    lea rbx, [members]
+    mov ebp, [member_count]
+.filter_member:
+    test ebp, ebp
+    jz .out
+    lea rdi, [rbx + CM_NAME]
+    movzx esi, byte [rbx + CM_NAME_LEN]
+    mov r8d, [rbx + CM_ID]
+    lea edx, [r8d + FILTER_ASSIGNEE]
+    mov ecx, IC_AVATAR
+    xor r9d, r9d
+    cmp r8d, [filter_assignee]
+    sete r9b
+    call push_item
+    add rbx, CM_SIZE
+    dec ebp
+    jmp .filter_member
 .out:
     pop r15
     pop r13
@@ -713,10 +777,9 @@ menu_command_items:
 .when_filtered:
     cmp eax, WHEN_FILTERED
     jne .add_command
-    cmp dword [filter_project], 0
-    jne .add_command
-    cmp dword [filter_label], -1
-    je .next_command
+    call filtered
+    test eax, eax
+    jz .next_command
 .add_command:
     mov rdi, [rbx]
     mov esi, [rbx + 8]
@@ -749,10 +812,98 @@ menu_command_items:
     inc ebp
     jmp .team
 .out:
+    call menu_issue_items
     pop r15
     pop r13
     pop r12
     pop rbp
+    pop rbx
+    ret
+
+; The command menu's search: the team's issues with the filter text in their
+; title or ID, after the commands.
+menu_issue_items:
+    cmp dword [fields + F_MENU * FD_SIZE + FD_LEN], 0
+    je .none
+    push rbx
+    push rbp
+    push r12
+    lea rbx, [view_issues]
+    mov ebp, [view_count]
+    xor r12d, r12d                          ; results so far
+.issue:
+    test ebp, ebp
+    jz .done
+    cmp r12d, ISSUE_RESULTS
+    jae .done
+    test dword [rbx + CI_ID], PENDING_ID
+    jnz .next                               ; nothing to open yet
+    lea rdi, [scratch]
+    mov rsi, rbx
+    call put_issue_id
+    lea rsi, [scratch]
+    sub rdi, rsi
+    xchg rdi, rsi
+    call matches_filter
+    test eax, eax
+    jnz .add
+    lea rdi, [rbx + CI_TITLE]
+    movzx esi, byte [rbx + CI_TITLE_LEN]
+    call matches_filter
+    test eax, eax
+    jz .next
+.add:
+    lea rdi, [rbx + CI_TITLE]
+    movzx esi, byte [rbx + CI_TITLE_LEN]
+    mov edx, [rbx + CI_ID]
+    or edx, CMD_ISSUE
+    mov ecx, IC_ISSUE
+    movzx r8d, byte [rbx + CI_STATUS]
+    xor r9d, r9d
+    call push_item
+    inc r12d
+.next:
+    add rbx, CI_SIZE
+    dec ebp
+    jmp .issue
+.done:
+    pop r12
+    pop rbp
+    pop rbx
+.none:
+    ret
+
+; A searched issue's ID, at the right end of its menu row.
+; edi = issue id, esi = the row's right edge, edx = baseline
+draw_menu_issue_id:
+    push rbx
+    push r12
+    push r13
+    mov r12d, esi
+    mov r13d, edx
+    call find_view_issue
+    test rax, rax
+    jz .done
+    lea rdi, [scratch]
+    mov rsi, rax
+    call put_issue_id
+    lea rax, [scratch]
+    sub rdi, rax
+    mov ebx, edi
+    lea rdi, [scratch]
+    mov esi, ebx
+    mov edx, ST_BODY
+    call text_width
+    mov edi, r12d
+    sub edi, eax
+    mov esi, r13d
+    lea rdx, [scratch]
+    mov ecx, ebx
+    mov r8d, INK(C_DIM, ST_BODY)
+    call draw_text
+.done:
+    pop r13
+    pop r12
     pop rbx
     ret
 
@@ -936,7 +1087,24 @@ draw_menu_rows:
     lea edi, [r12d + 46]
     lea esi, [r15d + 23]
     mov r8d, INK(C_TEXT, ST_BODY)
-    call draw_text
+    mov r9d, MENU_W - 66
+    cmp dword [rbp + MI_ICON], IC_ISSUE
+    jne .text
+    mov r9d, MENU_W - 160                   ; room for the ID
+.text:
+    call draw_text_fit
+    cmp dword [rbp + MI_ICON], IC_ISSUE
+    jne .create
+    mov edi, [rbp + MI_VALUE]
+    and edi, ~CMD_ISSUE
+    mov esi, r12d
+    add esi, MENU_W - 20
+    lea edx, [r15d + 23]
+    call draw_menu_issue_id
+    jmp .check
+.create:
+    add eax, r12d
+    add eax, 46
     cmp dword [rbp + MI_ICON], IC_PLUS
     jne .check
     mov edi, eax                            ; the name being created

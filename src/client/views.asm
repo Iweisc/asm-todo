@@ -20,6 +20,8 @@ text s_list,            "List"
 text s_board,           "Board"
 text s_issue_count,     " issues"
 text s_no_issues,       "No issues here"
+text s_no_matches,      "No issues match these filters"
+text s_unfilter_hint,   "Remove a filter above to see more."
 text s_press_c,         "Press C to create one, or Ctrl+K for everything else."
 text s_loading,         "Loading..."
 text s_no_team,         "Create a team to start tracking issues."
@@ -44,6 +46,8 @@ text s_team_name,       "Name"
 text s_team_key,        "Identifier, used in issue IDs like ENG-12"
 text s_label_is,        "Label: "
 text s_project_is,      "Project: "
+text s_priority_is,     "Priority: "
+text s_assignee_is,     "Assignee: "
 text s_owner,           "owner"
 text s_connected_to,    "Connected to "
 text s_connecting_to,   "Connecting to "
@@ -447,7 +451,18 @@ draw_login:
     sub r9d, ebx
     sub r9d, 16
     call draw_text_fit
+    cmp byte [restoring], 0
+    je .form
+    mov edi, ebx
+    lea esi, [r12d + 164]
+    lea rdx, [s_signing_in]
+    mov ecx, s_signing_in_len
+    mov r8d, INK(C_DIM, ST_BODY)
+    mov r9d, 340
+    call draw_text_fit
+    jmp .footer
 
+.form:
     mov edi, F_USER
     mov esi, ebx
     lea edx, [r12d + 140]
@@ -706,17 +721,45 @@ draw_filters:
     lea rsi, [s_label_is]
     mov edx, s_label_is_len
     xor ecx, ecx
-    call .filter_chip
+    call .named_chip
 .project:
     mov eax, [filter_project]
     test eax, eax
-    jz .count
+    jz .priority
     dec eax
     imul eax, eax, PJ_SIZE
     lea r15, [view_projects + rax]
     lea rsi, [s_project_is]
     mov edx, s_project_is_len
     mov ecx, 1
+    call .named_chip
+.priority:
+    mov edi, [filter_priority]
+    test edi, edi
+    js .assignee
+    call priority_name
+    mov r15, rsi
+    mov r9d, edx
+    lea rsi, [s_priority_is]
+    mov edx, s_priority_is_len
+    mov r8d, -1
+    mov ecx, 2
+    call .filter_chip
+.assignee:
+    mov edi, [filter_assignee]
+    test edi, edi
+    js .count
+    lea rsi, [s_no_assignee]
+    mov edx, s_no_assignee_len
+    jz .nobody
+    call user_name
+.nobody:
+    mov r15, rsi
+    mov r9d, edx
+    lea rsi, [s_assignee_is]
+    mov edx, s_assignee_is_len
+    mov r8d, -1
+    mov ecx, 3
     call .filter_chip
 .count:
     lea rdi, [scratch]
@@ -760,21 +803,26 @@ draw_filters:
     pop r12
     pop rbx
     ret
+; The same for a label or project, named and colored by its slot at r15.
+.named_chip:
+    mov r8d, [r15 + LB_COLOR]
+    movzx r9d, byte [r15 + LB_NAME_LEN]
+    lea r15, [r15 + LB_NAME]
 ; A removable filter chip at r14d. rsi = prefix, edx = its length,
-; r15 = label or project slot, ecx = A_UNFILTER's arg. Advances r14d.
+; r15 = name, r9d = its length, r8d = dot color or -1,
+; ecx = A_UNFILTER's arg. Advances r14d.
 .filter_chip:
     push rcx
     lea rdi, [scratch]
     call put_mem
-    lea rsi, [r15 + LB_NAME]
-    movzx edx, byte [r15 + LB_NAME_LEN]
+    mov rsi, r15
+    mov edx, r9d
     call put_mem
     lea rdx, [scratch]
     mov rcx, rdi
     sub rcx, rdx
     mov edi, r14d
     lea esi, [r12d + 8]
-    mov r8d, [r15 + LB_COLOR]
     call draw_removable_chip
     mov edx, eax
     mov edi, r14d
@@ -834,8 +882,13 @@ draw_list:
     mov r8d, s_loading_len
     cmp byte [loaded], 0
     je .note
+    call filtered
     lea rcx, [s_no_issues]
     mov r8d, s_no_issues_len
+    test eax, eax
+    jz .note
+    lea rcx, [s_no_matches]
+    mov r8d, s_no_matches_len
 .note:
     mov edi, [rsp]
     mov esi, [rsp + 8]
@@ -845,12 +898,18 @@ draw_list:
     call draw_centered
     cmp byte [loaded], 0
     je .done
+    call filtered
+    lea rcx, [s_press_c]
+    mov r8d, s_press_c_len
+    test eax, eax
+    jz .hint
+    lea rcx, [s_unfilter_hint]
+    mov r8d, s_unfilter_hint_len
+.hint:
     mov edi, [rsp]
     mov esi, [rsp + 8]
     mov edx, [rsp + 4]
     add edx, 104
-    lea rcx, [s_press_c]
-    mov r8d, s_press_c_len
     mov r9d, INK(C_FAINT, ST_BODY)
     call draw_centered
     jmp .done
@@ -2009,43 +2068,12 @@ draw_activity:
 .comment:
     cmp dword [rsp], 0
     je .compose
-    mov edi, [r13 + CC_AUTHOR]
-    call user_name
-    push rsi
-    push rdx
-    mov r8, rsi
-    mov edi, r14d
-    mov esi, r12d
-    mov edx, 18
-    mov ecx, [r13 + CC_AUTHOR]
-    call draw_avatar
-    pop rcx
-    pop rdx
-    lea edi, [r14d + 28]
-    lea esi, [r12d + 14]
-    mov r8d, INK(C_TEXT, ST_MEDIUM)
-    call draw_text
-    mov [rsp + 4], eax
-    lea rdi, [scratch]
-    mov esi, [r13 + CC_CREATED]
-    call put_ago
-    mov rcx, rdi
-    mov edi, [rsp + 4]
-    add edi, 8
-    lea esi, [r12d + 14]
-    mov r8d, INK(C_FAINT, ST_SMALL)
-    call draw_scratch
-    mov r9d, INK(C_TEXT, ST_BODY)
-    mov eax, INK(C_DIM, ST_BODY)            ; not on the server yet
-    cmp byte [r13 + CC_PENDING], 0
-    cmovne r9d, eax
-    lea rdi, [r13 + CC_TEXT]
-    movzx esi, word [r13 + CC_LEN]
-    lea edx, [r14d + 28]
-    lea ecx, [r12d + 24]
-    lea r8d, [r15d - 28]
-    call draw_wrapped
-    lea r12d, [r12d + eax + 44]
+    mov rdi, r13
+    mov esi, r14d
+    mov edx, r12d
+    mov ecx, r15d
+    call draw_comment
+    add r12d, eax
     add r13, CC_SIZE
     dec dword [rsp]
     jmp .comment
@@ -2131,7 +2159,7 @@ draw_comment_box:
     pop rbx
     ret
 
-; Shade, a click-catcher to dismiss, and the modal's box.
+; Shade, a click-catcher to dismiss, and the modal's box with an X to close it.
 ; edi = width, esi = height -> eax = x, edx = y
 modal_box:
     push rbx
@@ -2165,6 +2193,32 @@ modal_box:
     mov r8d, A_BLOCK
     xor r9d, r9d
     call add_hit
+    lea r12d, [ebx + r12d - 44]             ; the X
+    mov edi, A_CLOSE_MODAL
+    xor esi, esi
+    call hovering
+    test eax, eax
+    jz .close_hit
+    mov edi, r12d
+    mov esi, 96
+    mov edx, 28
+    mov ecx, 28
+    mov r8d, C_HOVER
+    mov r9d, 6
+    call fill_rrect
+.close_hit:
+    mov edi, r12d
+    mov esi, 96
+    mov edx, 28
+    mov ecx, 28
+    mov r8d, A_CLOSE_MODAL
+    xor r9d, r9d
+    call add_hit
+    lea edi, [r12d + 14]
+    mov esi, 110
+    mov edx, 18
+    mov ecx, C_DIM
+    call draw_cross
     mov eax, ebx
     mov edx, 80
     pop r13
@@ -2524,8 +2578,18 @@ draw_app:
     jmp .done
 .team_modal:
     cmp byte [modal], M_TEAM
-    jne .done
+    jne .labels_modal
     call draw_team_modal
+    jmp .done
+.labels_modal:
+    cmp byte [modal], M_LABELS
+    jne .password_modal
+    call draw_labels_modal
+    jmp .done
+.password_modal:
+    cmp byte [modal], M_PASSWORD
+    jne .done
+    call draw_password_modal
 .done:
     pop r15
     pop r14

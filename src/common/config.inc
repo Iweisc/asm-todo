@@ -48,6 +48,7 @@
 %define MSG_LOGIN           2                   ; str username, str password
 %define MSG_RESUME          3                   ; token[32]
 %define MSG_LOGOUT          4
+%define MSG_CHANGE_PASSWORD 5                   ; str current password, str new password
 %define MSG_CREATE_TEAM     16                  ; str key, str name
 %define MSG_ADD_MEMBER      17                  ; u32 team, str username
 %define MSG_REMOVE_MEMBER   18                  ; u32 team, u32 user (yourself = leave)
@@ -71,12 +72,13 @@
 %define MSG_CHAT            140                 ; u32 team, message
 %define MSG_CHAT_HISTORY    141                 ; u32 team, u32 peer, u8 n, n * message, oldest first
 %define MSG_UNREAD          142                 ; u32 team, u8 n, n * u32 peer with messages not seen yet
+%define MSG_PASSWORD_CHANGED 143                ; the user's other sessions are logged out
 
 ; An issue on the wire, without its description:
 ;   u32 id, u32 number, u8 status, u8 priority, u32 assignee, u8 project,
 ;   u16 labels, u32 creator, u32 created, u32 updated, str title
 ; A label or project: u32 color, str name. An empty name is an unused slot.
-; A comment: u32 id, u32 author, u32 created, str16 text
+; A comment: u32 id, u32 author, u32 created, str16 text, u8 edited
 ; A message: u32 id, u32 from, u32 to (0 for the team's channel), u32 created, str16 text
 ; Times are unix seconds.
 
@@ -88,6 +90,8 @@
 %define OP_SET_LABEL        5                   ; u8 slot, u32 color, str name (empty deletes it)
 %define OP_SET_PROJECT      6                   ; u8 slot (1-16), u32 color, str name (empty deletes it)
 %define OP_MESSAGE          7                   ; u32 to (0 for the team's channel), str16 text
+%define OP_EDIT_COMMENT     8                   ; u32 comment, str16 text. Only its author.
+%define OP_DELETE_COMMENT   9                   ; u32 comment. Its author or a team owner.
 
 ; OP_SET_FIELD fields and their values
 %define FIELD_STATUS        1                   ; u32
@@ -105,6 +109,8 @@
 %define EV_COMMENT          4                   ; u32 issue, comment
 %define EV_LABEL            5                   ; u8 slot, label. Deleting one clears it from every issue.
 %define EV_PROJECT          6                   ; u8 slot, project. Deleting one clears it from every issue.
+%define EV_COMMENT_EDITED   7                   ; u32 issue, comment
+%define EV_COMMENT_DELETED  8                   ; u32 issue, u32 comment
 
 ; MSG_ACK status
 %define ACK_OK              0

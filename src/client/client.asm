@@ -1,9 +1,11 @@
 ; todo-client: the desktop window for a team's issue tracker.
 ;
-; Usage: todo-client <server-key> [ip:port]     (defaults to 127.0.0.1:8080)
+; Usage: todo-client [<server-key> [ip:port]]    (defaults to 127.0.0.1:8080)
 ;
 ; <server-key> is the 64 hex characters todo-server prints at startup. The
 ; client refuses to talk to anything that can't prove it holds that key.
+; Without arguments it uses the server from last time, and either way it
+; resumes the login it saved there.
 ;
 ; It talks Wayland directly over the compositor socket, draws every pixel
 ; itself into shared memory, and keeps one encrypted WebSocket to the server.
@@ -17,8 +19,9 @@ bits 64
 
 section .rodata
 default_server:     db "127.0.0.1:8080", 0
-msg_usage:          db "usage: todo-client <server-key> [ip:port]", 10
-                    db "  <server-key> is the 64 hex characters todo-server prints at startup", 10, 0
+msg_usage:          db "usage: todo-client [<server-key> [ip:port]]", 10
+                    db "  <server-key> is the 64 hex characters todo-server prints at startup", 10
+                    db "  with no arguments it connects to the server it used last time", 10, 0
 msg_bad_key:        db "todo-client: the server key must be 64 hex characters", 10, 0
 msg_bad_addr:       db "todo-client: the server address must look like 127.0.0.1:8080", 10, 0
 
@@ -48,6 +51,15 @@ global _start
 %include "views.asm"
 %include "sidebar.asm"
 %include "chat.asm"
+%include "comments.asm"
+%include "labels.asm"
+%include "account.asm"
+%include "dialogs.asm"
+%include "keymap.asm"
+%include "edit.asm"
+%include "clipboard.asm"
+%include "session.asm"
+%include "localtime.asm"
 
 section .text
 
@@ -55,11 +67,29 @@ _start:
     call ignore_sigpipe
     mov rbx, rsp
     mov rax, [rbx]                          ; argc
-    cmp rax, 2
-    jb .usage
     cmp rax, 3
     ja .usage
+    lea rdi, [rbx + rax * 8 + 16]           ; envp
+    call session_init
+    mov rax, [rbx]
+    lea rdi, [rbx + rax * 8 + 16]
+    call tz_init
+    call session_load
+    mov r12d, eax
+    cmp qword [rbx], 1
+    ja .args
 
+    ; No arguments: the server from last time.
+    test r12d, r12d
+    jz .usage
+    lea rdi, [server_key]
+    lea rsi, [session_buf + SS_KEY]
+    mov edx, 32
+    call put_mem
+    lea rdi, [session_addr]
+    jmp .have_addr
+
+.args:
     mov rdi, [rbx + 16]                     ; argv[1]: the server's public key
     call strlen
     cmp rax, 64
@@ -70,7 +100,6 @@ _start:
     call parse_hex
     test eax, eax
     jz .bad_key
-
     lea rdi, [default_server]
     cmp qword [rbx], 3
     jb .have_addr
@@ -81,7 +110,15 @@ _start:
     call parse_addr
     test eax, eax
     jz .bad_addr
+    test r12d, r12d
+    jz .window
+    call session_restore
+    test eax, eax
+    jz .window
+    mov byte [restoring], 1
+    mov dword [focus], F_NONE
 
+.window:
     mov dword [win_w], 1200
     mov dword [win_h], 780
     call text_init

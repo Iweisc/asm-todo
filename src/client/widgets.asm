@@ -111,10 +111,11 @@ put_issue_id:
     pop rbx
     ret
 
-; rdi = cursor, esi = unix seconds -> rdi advanced past "Nov 1"
+; rdi = cursor, esi = unix seconds -> rdi advanced past "Nov 1", the local date
 put_date:
     push rbx
     mov eax, esi
+    add eax, [tz_offset]
     xor edx, edx
     mov ecx, 86400
     div ecx
@@ -295,7 +296,7 @@ wrap_line:
     ret
 
 ; Draws text wrapped to a width, wrap_lh apart, with the caret at wrap_caret
-; unless that's -1. Resets both.
+; unless that's -1, and wrap_sel_from to wrap_sel_to highlighted. Resets them all.
 ; rdi = text, esi = length, edx = x, ecx = top, r8d = width, r9d = ink
 ; -> eax = height used
 draw_wrapped:
@@ -324,6 +325,14 @@ draw_wrapped:
     call wrap_line
     mov r14d, eax                           ; characters shown
     mov [rsp + 12], edx                     ; characters used
+    mov edi, [rsp]
+    mov esi, r13d
+    lea rdx, [rbx + rbp]
+    mov ecx, ebp
+    mov r8d, r14d
+    mov r9d, [rsp + 8]
+    shr r9d, 24
+    call draw_line_selection
     mov edi, [rsp]
     mov esi, [wrap_lh]
     lea esi, [r13d + esi - 6]
@@ -372,6 +381,8 @@ draw_wrapped:
     inc r15d
 .done:
     mov dword [wrap_caret], -1
+    mov dword [wrap_sel_from], -1
+    mov dword [wrap_sel_to], -1
     mov eax, r15d
     imul eax, [wrap_lh]
     mov dword [wrap_lh], LINE_H
@@ -499,6 +510,14 @@ draw_field:
     mov rsi, r15
     lea edx, [r14d - 4]
     call fit_field_scroll
+    test ebp, ebp
+    jz .unselected
+    mov rdi, rbx
+    mov rsi, r15
+    mov edx, r12d
+    mov ecx, r13d
+    call draw_field_selection
+.unselected:
     mov eax, [rbx + FD_SCROLL]
     mov edi, r12d
     mov esi, r13d
@@ -692,6 +711,10 @@ draw_area:
     jz .text
     mov eax, [rbx + FD_CURSOR]
     mov [wrap_caret], eax
+    mov rdi, rbx
+    call sel_range
+    mov [wrap_sel_from], eax
+    mov [wrap_sel_to], edx
 .text:
     cmp dword [rbx + FD_LEN], 0
     jne .wrapped
@@ -951,6 +974,8 @@ draw_item_icon:
     mov r13d, edx
     mov eax, [rbx + MI_ICON]
     cmp eax, IC_STATUS
+    je .status
+    cmp eax, IC_ISSUE
     je .status
     cmp eax, IC_PRIORITY
     je .priority

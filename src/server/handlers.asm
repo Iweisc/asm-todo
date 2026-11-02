@@ -3,6 +3,8 @@
 
 %define JOB_LOGIN           1
 %define JOB_REGISTER        2
+%define JOB_CHECK_PASSWORD  3               ; the current password, before a change
+%define JOB_NEW_PASSWORD    4
 %define JOB_SLICE           25000       ; PBKDF2 iterations per event loop turn (~12ms)
 %define MAX_AUTH_FAILS      5
 %define RATE_SLOTS          64
@@ -64,6 +66,8 @@ handle_message:
     je .anonymous
     cmp eax, MSG_LOGOUT
     je .logout
+    cmp eax, MSG_CHANGE_PASSWORD
+    je .change_password
     cmp eax, MSG_CREATE_TEAM
     je .create_team
     cmp eax, MSG_ADD_MEMBER
@@ -101,6 +105,9 @@ handle_message:
     jmp .done
 .logout:
     call h_logout
+    jmp .done
+.change_password:
+    call h_change_password
     jmp .done
 .create_team:
     call h_create_team
@@ -574,6 +581,8 @@ finish_job:
     mov r12, rax
     and byte [r12 + C_FLAGS], ~F_BUSY
     dec dword [jobs_pending]
+    cmp byte [r12 + C_JOB_KIND], JOB_CHECK_PASSWORD
+    jae .password
     cmp byte [r12 + C_JOB_KIND], JOB_REGISTER
     je .register
 
@@ -652,12 +661,18 @@ finish_job:
     lea rsi, [e_full]
     mov edx, e_full_len
     call auth_failed
+    jmp .cleanup
+.password:
+    call finish_password_job
+    test eax, eax
+    jnz .busy                               ; on to hashing the new one
 .cleanup:
     lea rdi, [r12 + C_JOB_NAME_LEN]         ; name, salt and hash state, all of it
     mov esi, C_JOB + PB_SIZE - C_JOB_NAME_LEN
     call wipe
     mov edi, ebx                            ; input that arrived while hashing
     call conn_process
+.busy:
     pop r13
     pop r12
     pop rbx

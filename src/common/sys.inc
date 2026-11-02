@@ -11,6 +11,7 @@
 %define SYS_epoll_ctl       233
 %define SYS_epoll_create1   291
 %define SYS_mmap            9
+%define SYS_munmap          11
 %define SYS_rt_sigaction    13
 %define SYS_socket          41
 %define SYS_connect         42
@@ -24,10 +25,12 @@
 %define SYS_fdatasync       75
 %define SYS_ftruncate       77
 %define SYS_rename          82
+%define SYS_mkdir           83
 %define SYS_clock_gettime   228
 %define SYS_accept4         288
 %define SYS_memfd_create    319
 %define SYS_getrandom       318
+%define SYS_pipe2           293
 
 %define EINTR               4
 %define ENOENT              2
@@ -58,8 +61,10 @@
 %define SCM_RIGHTS          1
 %define MSG_CMSG_CLOEXEC    0x40000000
 
+%define PROT_READ           1
 %define PROT_RW             3
 %define MAP_SHARED          1
+%define MAP_PRIVATE         2
 %define MFD_CLOEXEC         1
 
 %define POLLIN              1

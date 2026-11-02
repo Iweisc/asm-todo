@@ -3,26 +3,14 @@
 section .rodata
 label_palette:  dd 0xeb5757, 0xf2994a, 0xf2c94c, 0x4cb782, 0x26b5ce, 0x4ea7fc, 0x5e6ad2, 0xbb87fc
 text st_no_slots,   "this team has used every label or project slot"
-
-; US layout, indexed by evdev key code. 0 means the key types nothing.
-keymap_plain:
-    db 0, 0, "1234567890-=", 0, 0
-    db "qwertyuiop[]", 0, 0
-    db "asdfghjkl;'`", 0, "\"
-    db "zxcvbnm,./", 0, "*", 0, " "
-    times 128 - ($ - keymap_plain) db 0
-keymap_shift:
-    db 0, 0, "!@#$%^&*()_+", 0, 0
-    db "QWERTYUIOP{}", 0, 0
-    db 'ASDFGHJKL:"~', 0, "|"
-    db "ZXCVBNM<>?", 0, "*", 0, " "
-    times 128 - ($ - keymap_shift) db 0
+text s_copied,      "copied "
 
 ; Fields that Tab moves between: from, to.
 tab_pairs:
     dd F_USER, F_PASS, F_PASS, F_USER
     dd F_NEW_TITLE, F_NEW_DESC, F_NEW_DESC, F_NEW_TITLE
     dd F_TEAM_NAME, F_TEAM_KEY, F_TEAM_KEY, F_TEAM_NAME
+    dd F_OLD_PASS, F_NEW_PASS, F_NEW_PASS, F_OLD_PASS
     dd -1
 
 section .bss
@@ -107,6 +95,14 @@ create_named:
 run_command:
     push rbx
     mov ebx, edi
+    test ebx, CMD_ISSUE
+    jnz .issue
+    cmp ebx, CMD_COPY_ID
+    je .copy_id
+    cmp ebx, CMD_LABELS
+    je .labels
+    cmp ebx, CMD_PASSWORD
+    je .password
     cmp ebx, CMD_NEW_ISSUE
     je .new_issue
     cmp ebx, CMD_LAYOUT
@@ -130,6 +126,21 @@ run_command:
 .chat:
     xor edi, edi
     call open_chat
+    jmp .done
+.issue:
+    call close_detail
+    mov edi, ebx
+    and edi, ~CMD_ISSUE
+    call open_issue
+    jmp .done
+.copy_id:
+    call copy_issue_id
+    jmp .done
+.labels:
+    call open_labels_modal
+    jmp .done
+.password:
+    call open_password_modal
     jmp .done
 .new_issue:
     call default_status
@@ -176,6 +187,43 @@ run_command:
     pop rbx
     ret
 
+; Puts the open or selected issue's ID, like ENG-12, on the clipboard.
+copy_issue_id:
+    push rbx
+    push r12
+    sub rsp, 8
+    call target_issue
+    test eax, eax
+    jz .done
+    test eax, PENDING_ID
+    jnz .done                               ; no number until the server has it
+    mov edi, eax
+    call find_view_issue
+    test rax, rax
+    jz .done
+    mov r12, rax
+    lea rdi, [scratch]
+    lea rsi, [s_copied]
+    mov edx, s_copied_len
+    call put_mem
+    mov rbx, rdi                            ; where the ID starts
+    mov rsi, r12
+    call put_issue_id
+    mov r12, rdi                            ; and ends
+    mov rsi, rbx
+    mov edx, r12d
+    sub edx, ebx
+    call clip_copy
+    lea rsi, [scratch]
+    mov edx, r12d
+    sub edx, esi
+    call set_status
+.done:
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
 ; -> eax = the status a new issue starts in for the current view
 default_status:
     mov eax, STATUS_TODO
@@ -191,8 +239,11 @@ set_view:
     mov byte [list_dirty], 1
     jmp close_detail
 
+; Turns every filter off.
 clear_filters:
     mov dword [filter_label], -1
+    mov dword [filter_priority], -1
+    mov dword [filter_assignee], -1
     mov dword [filter_project], 0
     mov byte [list_dirty], 1
     ret
@@ -204,6 +255,7 @@ logout:
     mov dword [focus], F_USER
     ret
 
+; A button press: does whatever the region under the pointer is for.
 ui_click:
     call update_hover
     mov byte [need_redraw], 1
@@ -214,14 +266,19 @@ ui_click:
     je .armed
     mov dword [delete_armed], 0             ; any other click backs out of deleting
 .armed:
-    cmp eax, A_CHAT
+    cmp eax, A_DELETE_COMMENT
+    je .comment_armed
+    mov dword [comment_armed], 0
+.comment_armed:
+    cmp eax, A_CHANGE_PASSWORD
     ja .done
     jmp [.table + rax * 8]
 .table:
     dq .nothing, .done, .field, .login, .signup, .team, .view, .project
     dq .new_issue, open_team_modal, logout, .remove, .leave, .issue, .layout, .filter
     dq .unfilter, .pick, choose_item, .dismiss, submit_create, submit_team, close_detail, .delete
-    dq .row_status, .row_priority, open_chat
+    dq .row_status, .row_priority, open_chat, .nothing, start_comment_edit, click_delete_comment
+    dq .dismiss, start_rename, click_remove_named, submit_password
 .nothing:
     ; Clicking empty space leaves whatever field was being edited.
     cmp dword [focus], F_PASS
@@ -229,15 +286,7 @@ ui_click:
     mov edi, F_NONE
     jmp set_focus
 .field:
-    cmp edi, F_TITLE
-    je .edit
-    cmp edi, F_DESC
-    je .edit
-    call set_focus
-    mov edi, [focus]
-    jmp place_caret
-.edit:
-    jmp begin_edit
+    jmp click_field
 .login:
     mov edi, MSG_LOGIN
     jmp do_auth
@@ -297,14 +346,21 @@ ui_click:
     xor esi, esi
     jmp open_menu
 .unfilter:
-    test edi, edi
-    jnz .unfilter_project
-    mov dword [filter_label], -1
     mov byte [list_dirty], 1
+    cmp edi, 1
+    je .unfilter_project
+    ja .unfilter_more
+    mov dword [filter_label], -1
     ret
 .unfilter_project:
     mov dword [filter_project], 0
-    mov byte [list_dirty], 1
+    ret
+.unfilter_more:
+    lea rax, [filter_priority]
+    lea rcx, [filter_assignee]
+    cmp edi, 3
+    cmove rax, rcx
+    mov dword [rax], -1
     ret
 .pick:
     xor esi, esi
@@ -316,9 +372,7 @@ ui_click:
 .dismiss:
     cmp byte [menu_open], 0
     jne close_menu
-    mov byte [modal], M_NONE
-    mov edi, F_NONE
-    jmp set_focus
+    jmp close_modal
 .delete:
     mov edi, [detail_issue]
     cmp edi, [delete_armed]
@@ -348,6 +402,7 @@ ui_release:
     push rbx
     push r12
     sub rsp, 8
+    mov dword [sel_drag], F_NONE
     mov ebx, [drag_id]
     test ebx, ebx
     jz .done
@@ -450,122 +505,6 @@ key_char:
 .done:
     ret
 
-; edi = field, esi = character. Inserts at the cursor if there's room.
-field_insert:
-    push rbx
-    push r12
-    sub rsp, 8
-    mov r12d, esi
-    call field_addr
-    mov rbx, rax
-    mov ecx, [rbx + FD_LEN]
-    cmp ecx, [rbx + FD_MAX]
-    jae .done
-    mov edx, [rbx + FD_CURSOR]
-    mov rsi, [rbx + FD_BUF]
-    add rsi, rdx
-    lea rdi, [rsi + 1]
-    sub ecx, edx
-    mov edx, ecx
-    call memmove
-    mov rax, [rbx + FD_BUF]
-    mov ecx, [rbx + FD_CURSOR]
-    mov [rax + rcx], r12b
-    inc dword [rbx + FD_CURSOR]
-    inc dword [rbx + FD_LEN]
-    mov byte [field_changed], 1
-.done:
-    add rsp, 8
-    pop r12
-    pop rbx
-    ret
-
-; Editing keys in a field. edi = field, esi = key code
-; -> eax = 1 if holding the key should repeat it
-field_key:
-    push rbx
-    push r12
-    sub rsp, 8
-    mov r12d, esi
-    mov ebx, edi
-    mov edi, r12d
-    call key_char
-    test eax, eax
-    jz .special
-    mov edi, ebx
-    mov esi, eax
-    call field_insert
-    jmp .repeat
-.special:
-    mov edi, ebx
-    call field_addr
-    mov rbx, rax
-    cmp r12d, KEY_BACKSPACE
-    je .backspace
-    cmp r12d, KEY_DELETE
-    je .delete
-    cmp r12d, KEY_LEFT
-    je .left
-    cmp r12d, KEY_RIGHT
-    je .right
-    cmp r12d, KEY_HOME
-    je .home
-    cmp r12d, KEY_END
-    je .end
-    jmp .no_repeat
-.backspace:
-    mov ecx, [rbx + FD_CURSOR]
-    test ecx, ecx
-    jz .repeat
-    dec dword [rbx + FD_CURSOR]
-    jmp .remove
-.delete:
-    mov ecx, [rbx + FD_CURSOR]
-    cmp ecx, [rbx + FD_LEN]
-    jae .repeat
-.remove:
-    mov ecx, [rbx + FD_CURSOR]
-    mov rdi, [rbx + FD_BUF]
-    add rdi, rcx
-    lea rsi, [rdi + 1]
-    mov edx, [rbx + FD_LEN]
-    sub edx, ecx
-    dec edx
-    call memmove
-    dec dword [rbx + FD_LEN]
-    mov eax, [rbx + FD_LEN]                 ; don't leave a password's last byte behind
-    mov rcx, [rbx + FD_BUF]
-    mov byte [rcx + rax], 0
-    mov byte [field_changed], 1
-    jmp .repeat
-.left:
-    cmp dword [rbx + FD_CURSOR], 0
-    je .repeat
-    dec dword [rbx + FD_CURSOR]
-    jmp .repeat
-.right:
-    mov eax, [rbx + FD_CURSOR]
-    cmp eax, [rbx + FD_LEN]
-    jae .repeat
-    inc dword [rbx + FD_CURSOR]
-    jmp .repeat
-.home:
-    mov dword [rbx + FD_CURSOR], 0
-    jmp .no_repeat
-.end:
-    mov eax, [rbx + FD_LEN]
-    mov [rbx + FD_CURSOR], eax
-.no_repeat:
-    xor eax, eax
-    jmp .out
-.repeat:
-    mov eax, 1
-.out:
-    add rsp, 8
-    pop r12
-    pop rbx
-    ret
-
 ; Enter, Esc and Tab in the focused field. edi = key code
 ; -> eax = 1 if handled here
 field_command:
@@ -604,6 +543,14 @@ field_command:
     je .comment
     cmp ebx, F_MESSAGE
     je .message
+    cmp ebx, F_EDIT
+    je .edit
+    cmp ebx, F_RENAME
+    je .rename
+    cmp ebx, F_OLD_PASS
+    je .password
+    cmp ebx, F_NEW_PASS
+    je .password
     test eax, MOD_CTRL                      ; descriptions: Ctrl+Enter finishes
     jz .newline
     cmp ebx, F_NEW_DESC
@@ -649,6 +596,17 @@ field_command:
     mov edx, OP_COMMENT
     call send_field
     jmp .handled
+.edit:
+    test eax, MOD_SHIFT
+    jnz .newline
+    call save_comment_edit
+    jmp .handled
+.rename:
+    call save_rename
+    jmp .handled
+.password:
+    call submit_password
+    jmp .handled
 .message:
     test eax, MOD_SHIFT
     jnz .newline
@@ -659,30 +617,9 @@ field_command:
     call send_field
     jmp .handled
 .esc:
-    cmp ebx, F_PASS
-    jbe .clear
-    cmp ebx, F_MENU
-    je .close_menu
-    cmp ebx, F_MESSAGE                      ; typing anywhere refocuses the box, so leave
-    je .leave_chat
-    cmp ebx, F_TEAM_KEY
-    jbe .close_modal                        ; F_NEW_TITLE..F_TEAM_KEY
-    cmp ebx, F_TITLE
-    jne .unfocus
-    mov dword [focus], F_NONE               ; a title edit is dropped, not saved
-    jmp .handled
-.clear:
     mov edi, ebx
-    call field_clear
+    call field_escape
     jmp .handled
-.close_menu:
-    call close_menu
-    jmp .handled
-.leave_chat:
-    call close_detail
-    jmp .handled
-.close_modal:
-    mov byte [modal], M_NONE
 .unfocus:
     mov edi, F_NONE
     call set_focus
@@ -708,6 +645,32 @@ field_command:
     add rsp, 8
     pop r12
     pop rbx
+    ret
+
+; Esc in the focused field backs out of whatever it's for. edi = the field
+field_escape:
+    cmp edi, F_PASS
+    jbe field_clear
+    cmp edi, F_MENU
+    je close_menu
+    cmp edi, F_MESSAGE                      ; typing anywhere refocuses the box, so leave
+    je close_detail
+    cmp edi, F_EDIT
+    je stop_comment_edit
+    cmp edi, F_RENAME
+    je stop_rename
+    cmp edi, F_OLD_PASS
+    jae close_modal
+    cmp edi, F_TEAM_KEY
+    ja .unfocus
+    mov byte [modal], M_NONE                ; F_NEW_TITLE..F_TEAM_KEY
+.unfocus:
+    cmp edi, F_TITLE
+    je .drop
+    mov edi, F_NONE
+    jmp set_focus
+.drop:
+    mov dword [focus], F_NONE               ; a title edit is dropped, not saved
     ret
 
 ; Sends a comment or message box's text and empties the box.
@@ -761,7 +724,10 @@ menu_key:
 ; Shortcuts, when no field has focus. edi = key code -> eax = 1 to repeat
 shortcut:
     push rbx
-    mov ebx, edi
+    call shortcut_key
+    mov ebx, eax
+    cmp byte [modal], M_NONE                ; a dialog with nothing focused only closes
+    jne .in_modal
     test dword [modifiers], MOD_CTRL
     jnz .ctrl
     cmp ebx, KEY_ESC
@@ -801,9 +767,14 @@ shortcut:
     je .pick
     jmp .no_repeat
 .ctrl:
+    cmp ebx, KEY_C
+    je .copy_id
     cmp ebx, KEY_B
     jne .no_repeat
     xor byte [board], 1
+    jmp .no_repeat
+.copy_id:
+    call copy_issue_id
     jmp .no_repeat
 .esc:
     cmp dword [detail_issue], 0
@@ -857,6 +828,11 @@ shortcut:
     jmp .no_repeat
 .pick:
     call pick_for_target
+    jmp .no_repeat
+.in_modal:
+    cmp ebx, KEY_ESC
+    jne .no_repeat
+    call close_modal
 .no_repeat:
     xor eax, eax
     jmp .done
@@ -888,7 +864,9 @@ ui_key:
     je .field
     test dword [modifiers], MOD_CTRL
     jz .menu
-    cmp ebx, KEY_K
+    mov edi, ebx
+    call shortcut_key
+    cmp eax, KEY_K
     jne .menu
     cmp byte [menu_open], 0                 ; Ctrl+K toggles the command menu
     je .open_commands

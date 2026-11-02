@@ -43,6 +43,7 @@ global _start
 %include "db.asm"
 %include "conn.asm"
 %include "handlers.asm"
+%include "password.asm"
 %include "teams.asm"
 %include "issues.asm"
 %include "messages.asm"

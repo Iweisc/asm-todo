@@ -60,6 +60,7 @@
 %define CC_LEN          12              ; u16
 %define CC_PENDING      14
 %define CC_TEXT         16              ; COMMENT_MAX bytes
+%define CC_EDITED       516             ; u8, 1 once its author changed it
 %define CC_SIZE         520
 
 ; A message in the open conversation.
@@ -96,7 +97,8 @@ fits CM_NAME, USERNAME_MAX, CM_SIZE
 fits LB_NAME, LABEL_NAME_MAX, LB_SIZE
 fits LB_NAME, PROJECT_NAME_MAX, PJ_SIZE
 fits CI_TITLE, TITLE_MAX, CI_PENDING
-fits CC_TEXT, COMMENT_MAX, CC_SIZE
+fits CC_TEXT, COMMENT_MAX, CC_EDITED
+fits CC_EDITED, 1, CC_SIZE
 fits PO_TEXT, TITLE_MAX, PO_BODY
 fits PO_BODY, DESC_MAX, PO_SIZE
 fits CH_LEN, 2, CH_PENDING
@@ -122,6 +124,7 @@ section .bss
 logged_in:      resb 1                  ; show the app rather than the login screen
 authed:         resb 1                  ; this connection is logged in
 auth_busy:      resb 1                  ; a login or sign-up is being checked
+restoring:      resb 1                  ; resuming the session saved by the last run
 resync:         resb 1                  ; resubscribe and resend after the next TEAMS
 loaded:         resb 1                  ; the current team's snapshot is complete
 select_new:     resb 1                  ; switch to the team we just created once it shows up
@@ -292,6 +295,7 @@ sync_reset:
     lea rdi, [token]
     mov esi, 32
     call wipe
+    call session_save                       ; the saved one is no good now either
     xor eax, eax
     mov [logged_in], al
     mov [authed], al
@@ -301,11 +305,13 @@ sync_reset:
     mov [current_team], eax
     mov [status_len], eax
     mov byte [need_redraw], 1
+    call ui_logged_out
     jmp clear_team_view
 
 sync_on_open:
-    cmp byte [logged_in], 0
-    je .done
+    mov al, [logged_in]
+    or al, [restoring]
+    jz .done
     lea rdi, [out_msg]
     mov esi, MSG_RESUME
     call wr_u8
@@ -320,6 +326,7 @@ sync_on_open:
 sync_on_offline:
     mov byte [authed], 0
     mov byte [auth_busy], 0
+    mov byte [password_busy], 0
     mov byte [need_redraw], 1
     ret
 
@@ -331,7 +338,7 @@ sync_on_message:
     call rd_begin
     call rd_u8
     sub eax, MSG_AUTH_OK
-    cmp eax, MSG_UNREAD - MSG_AUTH_OK
+    cmp eax, MSG_PASSWORD_CHANGED - MSG_AUTH_OK
     ja .bad
     lea rcx, [.table]
     call [rcx + rax * 8]
@@ -349,7 +356,7 @@ sync_on_message:
 .table:
     dq on_auth_ok, on_auth_fail, on_error, on_teams, on_snapshot, on_event
     dq on_ack, on_members, on_logged_out, on_team_meta, on_issue_detail
-    dq on_chat, on_chat_history, on_unread
+    dq on_chat, on_chat_history, on_unread, on_password_changed
 
 on_auth_ok:
     push rbx
@@ -392,6 +399,8 @@ on_auth_ok:
     mov byte [logged_in], 1
     mov byte [authed], 1
     mov byte [auth_busy], 0
+    mov byte [restoring], 0
+    call session_save
     mov byte [resync], 1
     mov dword [auth_msg_len], 0
     call ui_logged_in
@@ -407,6 +416,13 @@ on_auth_fail:
     mov rsi, rax
     call set_auth_msg
     mov byte [auth_busy], 0
+    cmp byte [restoring], 0
+    je .live
+    ; The saved session ran out: back to the form.
+    mov byte [restoring], 0
+    call ui_login_form
+    jmp sync_reset
+.live:
     cmp byte [logged_in], 0
     je .done
     jmp sync_reset                          ; our session is gone, back to the login screen
@@ -414,6 +430,7 @@ on_auth_fail:
     ret
 
 on_error:
+    mov byte [password_busy], 0             ; the likely answer to a change
     call rd_str
     mov rsi, rax
     jmp set_status
@@ -777,6 +794,61 @@ forget_named:
 .done:
     ret
 
+; EV_LABEL and EV_PROJECT: a slot's new name and color. An emptied one is
+; gone, so the team's issues drop it. edi = event kind
+on_named_event:
+    push rbx
+    cmp edi, EV_PROJECT
+    je .project
+.label:
+    call rd_u8
+    cmp eax, LABEL_SLOTS
+    jae .bad
+    mov ebx, eax
+    imul edi, eax, LB_SIZE
+    add rdi, labels
+    mov esi, LABEL_NAME_MAX
+    call read_named
+    imul eax, ebx, LB_SIZE
+    cmp byte [labels + rax + LB_NAME_LEN], 0
+    jne .done
+    lea rdi, [issues]
+    mov esi, [issue_count]
+    mov edx, 1
+    mov ecx, ebx
+    shl edx, cl
+    call forget_named
+    jmp .done
+
+.project:
+    call rd_u8
+    lea ecx, [eax - 1]
+    cmp ecx, PROJECT_SLOTS
+    jae .bad
+    mov ebx, eax
+    imul edi, ecx, PJ_SIZE
+    add rdi, projects
+    mov esi, PROJECT_NAME_MAX
+    call read_named
+    lea eax, [ebx - 1]
+    imul eax, eax, PJ_SIZE
+    cmp byte [projects + rax + LB_NAME_LEN], 0
+    jne .done
+    lea rdi, [issues]
+    mov esi, [issue_count]
+    xor edx, edx
+    mov ecx, ebx
+    call forget_named
+
+.done:
+    pop rbx
+    ret
+.bad:
+    mov byte [rd_bad], 1
+    pop rbx
+    ret
+
+; EVENT: one change to a team, in its sequence. A gap asks for a new snapshot.
 on_event:
     push rbx
     push r12
@@ -805,10 +877,14 @@ on_event:
     je .deleted
     cmp r13d, EV_COMMENT
     je .comment
+    cmp r13d, EV_COMMENT_EDITED
+    je .comment
+    cmp r13d, EV_COMMENT_DELETED
+    je .comment
     cmp r13d, EV_LABEL
-    je .label
+    je .named
     cmp r13d, EV_PROJECT
-    je .project
+    je .named
     jmp .bad
 
 .issue:
@@ -876,82 +952,14 @@ on_event:
     jmp .applied
 
 .comment:
-    call rd_u32
-    mov ebx, eax
-    sub rsp, CC_SIZE + 8
-    call rd_u32
-    mov [rsp + CC_ID], eax
-    call rd_u32
-    mov [rsp + CC_AUTHOR], eax
-    call rd_u32
-    mov [rsp + CC_CREATED], eax
-    call rd_str16
-    cmp edx, COMMENT_MAX
-    ja .comment_bad
-    mov [rsp + CC_LEN], dx
-    mov byte [rsp + CC_PENDING], 0
-    lea rdi, [rsp + CC_TEXT]
-    mov rsi, rax
-    call put_mem
-    cmp ebx, [detail_issue]
-    jne .comment_done
-    cmp byte [detail_loaded], 0
-    je .comment_done                        ; ISSUE_DETAIL will include it
-    mov eax, [comment_count]
-    cmp eax, ISSUE_COMMENT_MAX
-    jae .comment_done
-    imul eax, eax, CC_SIZE
-    lea rdi, [comments + rax]
-    mov rsi, rsp
-    mov ecx, CC_SIZE
-    rep movsb
-    inc dword [comment_count]
-.comment_done:
-    add rsp, CC_SIZE + 8
-    jmp .applied
-.comment_bad:
-    add rsp, CC_SIZE + 8
-    jmp .bad
-
-.label:
-    call rd_u8
-    cmp eax, LABEL_SLOTS
-    jae .bad
-    mov ebx, eax
-    imul edi, eax, LB_SIZE
-    add rdi, labels
-    mov esi, LABEL_NAME_MAX
-    call read_named
-    imul eax, ebx, LB_SIZE
-    cmp byte [labels + rax + LB_NAME_LEN], 0
-    jne .applied
-    lea rdi, [issues]
-    mov esi, [issue_count]
-    mov edx, 1
-    mov ecx, ebx
-    shl edx, cl
-    call forget_named
+    mov edi, r13d
+    call on_comment_event
     jmp .applied
 
-.project:
-    call rd_u8
-    lea ecx, [eax - 1]
-    cmp ecx, PROJECT_SLOTS
-    jae .bad
-    mov ebx, eax
-    imul edi, ecx, PJ_SIZE
-    add rdi, projects
-    mov esi, PROJECT_NAME_MAX
-    call read_named
-    lea eax, [ebx - 1]
-    imul eax, eax, PJ_SIZE
-    cmp byte [projects + rax + LB_NAME_LEN], 0
-    jne .applied
-    lea rdi, [issues]
-    mov esi, [issue_count]
-    xor edx, edx
-    mov ecx, ebx
-    call forget_named
+.named:
+    mov edi, r13d
+    call on_named_event
+    jmp .applied
 
 .applied:
     cmp byte [rd_bad], 0
@@ -975,6 +983,7 @@ on_event:
     pop rbx
     ret
 
+; ISSUE_DETAIL: the open issue's description and comments.
 on_issue_detail:
     push rbx
     push r12
@@ -998,20 +1007,8 @@ on_issue_detail:
 .comment:
     cmp r13d, r12d
     jae .read
-    call rd_u32
-    mov [rbx + CC_ID], eax
-    call rd_u32
-    mov [rbx + CC_AUTHOR], eax
-    call rd_u32
-    mov [rbx + CC_CREATED], eax
-    call rd_str16
-    cmp edx, COMMENT_MAX
-    ja .bad
-    mov [rbx + CC_LEN], dx
-    mov byte [rbx + CC_PENDING], 0
-    lea rdi, [rbx + CC_TEXT]
-    mov rsi, rax
-    call put_mem
+    mov rdi, rbx
+    call read_comment
     add rbx, CC_SIZE
     inc r13d
     jmp .comment
@@ -1163,9 +1160,11 @@ send_op:
     je .named
     cmp eax, OP_SET_PROJECT
     je .named
-    mov esi, [rbx + PO_ISSUE]               ; delete, comment and message
+    mov esi, [rbx + PO_ISSUE]               ; deletes, comments and messages
     call wr_u32
     cmp byte [rbx + PO_KIND], OP_DELETE_ISSUE
+    je .send
+    cmp byte [rbx + PO_KIND], OP_DELETE_COMMENT
     je .send
     jmp .body
 .create:
@@ -1959,6 +1958,10 @@ rebuild_view:
     je .label
     cmp eax, OP_SET_PROJECT
     je .project
+    cmp eax, OP_EDIT_COMMENT
+    je .comment_op
+    cmp eax, OP_DELETE_COMMENT
+    je .comment_op
     jmp .next                               ; messages show in the chat
 
 .create:
@@ -2073,11 +2076,16 @@ rebuild_view:
     call unix_now
     mov [r12 + CC_CREATED], eax
     mov byte [r12 + CC_PENDING], 1
+    mov byte [r12 + CC_EDITED], 0
     movzx ecx, word [rbx + PO_BODY_LEN]
     mov [r12 + CC_LEN], cx
     lea rdi, [r12 + CC_TEXT]
     lea rsi, [rbx + PO_BODY]
     rep movsb
+    jmp .next
+.comment_op:
+    mov rdi, rbx
+    call apply_comment_op
     jmp .next
 
 .label:

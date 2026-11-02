@@ -75,6 +75,7 @@
 %define CMT_CREATED     12
 %define CMT_LEN         16              ; u16
 %define CMT_TEXT        18              ; COMMENT_MAX bytes
+%define CMT_EDITED      518             ; u8, 1 once its author changed it
 %define CMT_SIZE        520
 
 ; Connections keep a session's slot index. A slot with user 0 is free.
@@ -113,7 +114,8 @@ fits TEAM_LABELS, LABEL_SLOTS * LABEL_SIZE, TEAM_PROJECTS
 fits TEAM_PROJECTS, PROJECT_SLOTS * PROJ_SIZE, TEAM_SIZE
 fits ISS_TITLE, TITLE_MAX, ISS_DESC
 fits ISS_DESC, DESC_MAX, ISSUE_SIZE
-fits CMT_TEXT, COMMENT_MAX, CMT_SIZE
+fits CMT_TEXT, COMMENT_MAX, CMT_EDITED
+fits CMT_EDITED, 1, CMT_SIZE
 fits SESS_HASH, 32, SESS_USER
 fits MS_LEN, 2, MS_TEXT
 fits MS_TEXT, MESSAGE_MAX, MS_SIZE
@@ -139,7 +141,10 @@ fits SEEN_LAST, 4, SEEN_SIZE
 %define T_HEADER        0xff
 
 %define DB_MAGIC        0x33445441      ; "ATD3"
-%define DB_VERSION      1
+; Version 2 gave comments CMT_EDITED in bytes that were always zero before,
+; so a version 1 file loads as it is and gets saved as version 2.
+%define DB_VERSION      2
+%define DB_VERSION_OLD  1
 %define DB_HEADER       96
 %define HEADER_LOGGED   64              ; the part without the private key
 %define JOURNAL_MAGIC   0x314a5441      ; "ATJ1"
@@ -337,7 +342,10 @@ db_load:
     cmp dword [db_magic], DB_MAGIC
     jne .bad
     cmp dword [db_version], DB_VERSION
+    je .version
+    cmp dword [db_version], DB_VERSION_OLD
     jne .bad
+.version:
     call counts_ok
     test eax, eax
     jz .bad
@@ -584,6 +592,7 @@ db_save:
     push r12
     push r13
     inc dword [db_generation]
+    mov dword [db_version], DB_VERSION      ; an old file gets saved as the current version
     mov eax, SYS_open
     lea rdi, [tmp_path]
     mov esi, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC

@@ -12,6 +12,7 @@
 
 %define WL_OUT_MAX          4096
 %define WL_IN_MAX           8192
+%define WL_FDS_MAX          8
 
 ; Two buffers big enough for a 4K window. memfd pages are only allocated once
 ; touched, so this costs memory proportional to the real window size.
@@ -34,6 +35,7 @@ s_wl_shm:           db "wl_shm", 0
 s_xdg_wm_base:      db "xdg_wm_base", 0
 s_wl_seat:          db "wl_seat", 0
 s_cursor_shape:     db "wp_cursor_shape_manager_v1", 0
+s_data_manager:     db "wl_data_device_manager", 0
 s_runtime_env:      db "XDG_RUNTIME_DIR=", 0
 s_display_env:      db "WAYLAND_DISPLAY=", 0
 s_default_display:  db "wayland-0", 0
@@ -55,6 +57,7 @@ wanted_globals:
     dq s_xdg_wm_base,   1, id_wm_base
     dq s_wl_seat,       5, id_seat
     dq s_cursor_shape,  1, id_cursor_manager
+    dq s_data_manager,  3, id_data_manager
     dq 0
 
 ; Objects whose events we handle. Buffers are matched separately.
@@ -68,6 +71,11 @@ event_handlers:
     dq id_toplevel,     on_toplevel
     dq id_pointer,      on_pointer
     dq id_keyboard,     on_keyboard
+    dq id_data_device,  on_data_device
+    dq id_data_source,  on_data_source
+    dq stale_source,    on_data_source
+    dq new_offer,       on_data_offer
+    dq clip_offer,      on_data_offer
     dq 0
 
 id_display:         dd ID_DISPLAY
@@ -83,6 +91,8 @@ wl_in_len:          resd 1
 wl_out:             resb WL_OUT_MAX
 wl_in:              resb WL_IN_MAX
 wl_cmsg:            resb 64
+wl_fds:             resd WL_FDS_MAX     ; received with messages not handled yet, oldest first
+wl_fd_count:        resd 1
 wl_sockaddr:        resb 110
 
 id_registry:        resd 1
@@ -276,8 +286,8 @@ wl_read_events:
     jle .lost
     add [wl_in_len], eax
 
-    ; The only fd we can receive is the keymap. We hardcode a US layout
-    ; instead of parsing XKB, so it gets closed right away.
+    ; Fds come with the messages that carry them, in order: the keymap and
+    ; clipboard requests. Their handlers take them with wl_take_fd.
     cmp qword [rsp + 40], 16
     jb .dispatch
     lea rbx, [wl_cmsg]
@@ -286,15 +296,24 @@ wl_read_events:
     mov r12, [rbx]
     sub r12, 16
     shr r12, 2                              ; number of fds
-.close_fd:
+.keep_fd:
     test r12, r12
     jz .dispatch
-    mov eax, SYS_close
     mov edi, [rbx + 16]
+    mov eax, [wl_fd_count]
+    cmp eax, WL_FDS_MAX
+    jae .close_fd
+    lea rcx, [wl_fds]
+    mov [rcx + rax * 4], edi
+    inc dword [wl_fd_count]
+    jmp .next_fd
+.close_fd:
+    mov eax, SYS_close
     syscall
+.next_fd:
     add rbx, 4
     dec r12
-    jmp .close_fd
+    jmp .keep_fd
 
 .dispatch:
     xor ebx, ebx                            ; offset of the current message
@@ -330,6 +349,26 @@ wl_read_events:
 .lost:
     lea rdi, [msg_lost]
     call fatal
+
+; -> eax = the oldest fd received and not taken yet, or -1
+wl_take_fd:
+    mov eax, -1
+    mov ecx, [wl_fd_count]
+    test ecx, ecx
+    jz .done
+    mov eax, [wl_fds]
+    dec ecx
+    mov [wl_fd_count], ecx
+    xor edx, edx
+.shift:
+    cmp edx, ecx
+    jae .done
+    mov r8d, [wl_fds + rdx * 4 + 4]
+    mov [wl_fds + rdx * 4], r8d
+    inc edx
+    jmp .shift
+.done:
+    ret
 
 ; edi = object id, esi = opcode, rdx = args
 dispatch_event:
@@ -559,8 +598,12 @@ on_pointer:
     cmp dword [rdx + 8], 0x110              ; BTN_LEFT
     jne .done
     cmp dword [rdx + 12], 1                 ; pressed
-    je ui_click
-    jmp ui_release
+    jne ui_release
+    mov eax, [rdx]
+    mov [input_serial], eax
+    mov eax, [rdx + 4]
+    mov [pointer_time], eax
+    jmp ui_click
 .axis:
     mov esi, [rdx + 4]                      ; 0 vertical, 1 sideways
     cmp esi, 1
@@ -577,7 +620,20 @@ on_keyboard:
     lea rax, [.table]
     jmp [rax + rsi * 8]
 .table:
-    dq .done, .enter, .leave, .key, .modifiers, .repeat_info
+    dq .keymap, .enter, .leave, .key, .modifiers, .repeat_info
+.keymap:
+    push rdx
+    call wl_take_fd
+    pop rdx
+    test eax, eax
+    js .done
+    mov edi, eax
+    mov esi, [rdx + 4]                      ; size
+    cmp dword [rdx], 1                      ; XKB_V1, the only text format
+    je keymap_load
+    mov eax, SYS_close
+    syscall
+    ret
 .enter:
     mov byte [keyboard_focus], 1
     mov byte [need_redraw], 1
@@ -588,6 +644,8 @@ on_keyboard:
     mov byte [need_redraw], 1
     ret
 .key:
+    mov eax, [rdx]
+    mov [input_serial], eax
     mov edi, [rdx + 8]
     mov esi, [rdx + 12]
     jmp ui_key_event
@@ -763,6 +821,7 @@ wl_init:
     je .missing_globals
     cmp dword [id_wm_base], 0
     je .missing_globals
+    call clip_init
 
     mov edi, [id_compositor]
     xor esi, esi                            ; create_surface
