@@ -40,6 +40,8 @@ read_comment:
     call put_mem
     call rd_u8
     mov [rbx + CC_EDITED], al
+    lea rdi, [rbx + CC_IMAGE]
+    call read_image_ref
     pop rbx
     ret
 
@@ -170,6 +172,8 @@ apply_comment_op:
 ; edi = comment, rsi = its new text, edx = length -> eax = 1 if queued
 sync_edit_comment:
     mov ecx, OP_EDIT_COMMENT
+    xor r8d, r8d                            ; an edit keeps the image it had
+    xor r9d, r9d
     jmp sync_text
 
 ; edi = comment
@@ -202,10 +206,11 @@ start_comment_edit:
     pop rbx
     ret
 
-; Closes the comment being edited without saving.
+; Closes the comment or message being edited without saving.
 stop_comment_edit:
     sub rsp, 8
     mov dword [editing_comment], 0
+    mov dword [editing_message], 0
     mov edi, F_EDIT
     call field_clear
     cmp dword [focus], F_EDIT
@@ -325,6 +330,13 @@ draw_comment_actions:
     jnz .shown
     mov edi, A_DELETE_COMMENT
     mov esi, ebp
+    call hovering
+    test eax, eax
+    jnz .shown
+    mov esi, [rbx + CC_IMAGE + RI_ID]
+    test esi, esi
+    jz .done
+    mov edi, A_IMAGE
     call hovering
     test eax, eax
     jz .done
@@ -489,6 +501,9 @@ draw_comment:
     lea ebp, [eax + 44]
     jmp .actions
 .text:
+    xor eax, eax
+    cmp word [rbx + CC_LEN], 0
+    je .image                               ; just an image
     mov r9d, INK(C_TEXT, ST_BODY)
     mov eax, INK(C_DIM, ST_BODY)            ; not on the server yet
     cmp byte [rbx + CC_PENDING], 0
@@ -499,6 +514,12 @@ draw_comment:
     lea ecx, [r12d + 24]
     lea r8d, [r15d - 28]
     call draw_wrapped
+.image:
+    mov [rsp], eax                          ; the text's height
+    lea rdi, [rbx + CC_IMAGE]
+    lea esi, [r15d - 28]
+    call image_ref_height
+    add eax, [rsp]
     lea ebp, [eax + 44]
     ; The whole comment, so hovering anywhere on it shows its actions.
     mov edi, r14d
@@ -508,6 +529,13 @@ draw_comment:
     mov r8d, A_COMMENT
     mov r9d, [rbx + CC_ID]
     call add_hit
+    ; The image after the comment's region, so clicks on it open it.
+    lea rdi, [rbx + CC_IMAGE]
+    lea esi, [r14d + 28]
+    mov edx, [rsp]
+    lea edx, [edx + r12d + 24]
+    lea ecx, [r15d - 28]
+    call draw_image_ref
 .actions:
     mov rdi, rbx
     mov esi, r14d

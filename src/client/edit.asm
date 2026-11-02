@@ -219,6 +219,10 @@ field_insert_text:
     mov r12d, edi
     mov r13, rsi
     mov r14d, edx
+    mov esi, UK_OTHER
+    xor edx, edx
+    call undo_note
+    mov edi, r12d
     call field_addr
     mov rbx, rax
     mov rdi, rax
@@ -585,8 +589,15 @@ field_key:
     call key_char
     test eax, eax
     jz .special
+    mov ebx, eax
     mov edi, r13d
-    mov esi, eax
+    mov esi, UK_TYPE
+    xor edx, edx
+    cmp ebx, ' '                            ; undo takes back a word at a time
+    sete dl
+    call undo_note
+    mov edi, r13d
+    mov esi, ebx
     call field_insert
     jmp .repeat
 .special:
@@ -598,14 +609,15 @@ field_key:
     mov edi, r12d
     call shortcut_key
     mov r12d, eax
-    cmp r12d, KEY_A
-    je .all
-    cmp r12d, KEY_C
-    je .copy
-    cmp r12d, KEY_X
-    je .cut
-    cmp r12d, KEY_V
-    je .paste
+    mov edi, r13d
+    mov esi, r12d
+    mov rdx, rbx
+    call field_ctrl_key
+    test eax, eax
+    jz .keys
+    cmp eax, 2
+    je .repeat
+    jmp .no_repeat
 .keys:
     cmp r12d, KEY_BACKSPACE
     je .backspace
@@ -622,6 +634,10 @@ field_key:
     mov [rbx + FD_ANCHOR], eax
     jmp .repeat
 .backspace:
+    mov edi, r13d
+    mov esi, UK_DELETE
+    xor edx, edx
+    call undo_note
     mov rdi, rbx
     call delete_selection
     test eax, eax
@@ -642,6 +658,10 @@ field_key:
     call delete_range
     jmp .repeat
 .delete:
+    mov edi, r13d
+    mov esi, UK_DELETE
+    xor edx, edx
+    call undo_note
     mov rdi, rbx
     call delete_selection
     test eax, eax
@@ -661,26 +681,6 @@ field_key:
     mov esi, [rbx + FD_CURSOR]
     call delete_range
     jmp .repeat
-.all:
-    mov dword [rbx + FD_ANCHOR], 0
-    mov eax, [rbx + FD_LEN]
-    mov [rbx + FD_CURSOR], eax
-    jmp .no_repeat
-.copy:
-    mov rdi, rbx
-    call copy_selection
-    jmp .no_repeat
-.cut:
-    mov rdi, rbx
-    call copy_selection
-    test eax, eax
-    jz .no_repeat
-    mov rdi, rbx
-    call delete_selection
-    jmp .no_repeat
-.paste:
-    mov edi, r13d
-    call clip_paste
 .no_repeat:
     xor eax, eax
     jmp .out
@@ -688,6 +688,74 @@ field_key:
     mov eax, 1
 .out:
     pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Ctrl with a letter in a field: select all, copy, cut, paste, undo, redo.
+; edi = field, esi = the letter's US key code, rdx = field struct
+; -> eax = 0 if it's none of those, 1 if done, 2 if done and it repeats
+field_ctrl_key:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov r12d, edi
+    mov rbx, rdx
+    cmp esi, KEY_A
+    je .all
+    cmp esi, KEY_C
+    je .copy
+    cmp esi, KEY_X
+    je .cut
+    cmp esi, KEY_V
+    je .paste
+    cmp esi, KEY_Z
+    je .undo
+    cmp esi, KEY_Y
+    je .redo
+    xor eax, eax
+    jmp .out
+.all:
+    mov dword [rbx + FD_ANCHOR], 0
+    mov eax, [rbx + FD_LEN]
+    mov [rbx + FD_CURSOR], eax
+    jmp .done
+.copy:
+    mov rdi, rbx
+    call copy_selection
+    jmp .done
+.cut:
+    mov rdi, rbx
+    call copy_selection
+    test eax, eax
+    jz .done
+    mov edi, r12d
+    mov esi, UK_OTHER
+    xor edx, edx
+    call undo_note
+    mov rdi, rbx
+    call delete_selection
+    jmp .done
+.paste:
+    mov edi, r12d
+    call clip_paste
+    jmp .done
+.undo:
+    xor esi, esi
+    test dword [modifiers], MOD_SHIFT       ; Ctrl+Shift+Z redoes
+    setnz sil
+    jmp .history
+.redo:
+    mov esi, 1
+.history:
+    mov edi, r12d
+    call undo_step
+    mov eax, 2
+    jmp .out
+.done:
+    mov eax, 1
+.out:
+    add rsp, 8
     pop r12
     pop rbx
     ret

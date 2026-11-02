@@ -61,7 +61,8 @@
 %define CC_PENDING      14
 %define CC_TEXT         16              ; COMMENT_MAX bytes
 %define CC_EDITED       516             ; u8, 1 once its author changed it
-%define CC_SIZE         520
+%define CC_IMAGE        520             ; an image ref
+%define CC_SIZE         528
 
 ; A message in the open conversation.
 %define CH_ID           0
@@ -70,7 +71,15 @@
 %define CH_LEN          12              ; u16
 %define CH_PENDING      14
 %define CH_TEXT         16              ; MESSAGE_MAX bytes
-%define CH_SIZE         520
+%define CH_EDITED       516             ; u8, 1 once its author changed it
+%define CH_IMAGE        520             ; an image ref
+%define CH_SIZE         528
+
+; An image ref: what a message or comment says about its image.
+%define RI_ID           0               ; 0 for no image
+%define RI_W            4               ; u16
+%define RI_H            6               ; u16
+%define RI_SIZE         8
 %define CHAT_MAX        200             ; kept for the open conversation, the oldest go first
 
 %define PENDING_MAX     128
@@ -90,6 +99,8 @@
 %define PO_TEXT         32              ; a title or name, TITLE_MAX bytes
 %define PO_BODY         152             ; a description or comment, DESC_MAX bytes
 %define PO_SIZE         1656
+%define PO_IMAGE        PO_VALUE        ; a comment's or message's image id
+%define PO_IMAGE_SIZE   PO_ASSIGNEE     ; and its width | height << 16, an image ref's last half
 
 fits CO_KEY, TEAM_KEY_MAX, CO_NAME_LEN
 fits CO_NAME, TEAMNAME_MAX, CO_SIZE
@@ -98,17 +109,22 @@ fits LB_NAME, LABEL_NAME_MAX, LB_SIZE
 fits LB_NAME, PROJECT_NAME_MAX, PJ_SIZE
 fits CI_TITLE, TITLE_MAX, CI_PENDING
 fits CC_TEXT, COMMENT_MAX, CC_EDITED
-fits CC_EDITED, 1, CC_SIZE
+fits CC_EDITED, 1, CC_IMAGE
+fits CC_IMAGE, RI_SIZE, CC_SIZE
 fits PO_TEXT, TITLE_MAX, PO_BODY
 fits PO_BODY, DESC_MAX, PO_SIZE
 fits CH_LEN, 2, CH_PENDING
 fits CH_PENDING, 1, CH_TEXT
-fits CH_TEXT, MESSAGE_MAX, CH_SIZE
+fits CH_TEXT, MESSAGE_MAX, CH_EDITED
+fits CH_EDITED, 1, CH_IMAGE
+fits CH_IMAGE, RI_SIZE, CH_SIZE
+fits RI_W, 2, RI_H
+fits RI_H, 2, RI_SIZE
 
 %define VIEW_MAX        (TEAM_ISSUE_MAX + PENDING_MAX)
 %define VIEW_COMMENTS   (ISSUE_COMMENT_MAX + PENDING_MAX)
 %define VIEW_CHAT       (CHAT_MAX + PENDING_MAX)
-%define UNREAD_MAX      (TEAM_MEMBER_MAX + 1)
+%define UNREAD_MAX      (TEAM_MEMBER_MAX + 1 + CHANNEL_SLOTS)
 %define STATUS_MAX      128
 
 section .rodata
@@ -124,6 +140,7 @@ section .bss
 logged_in:      resb 1                  ; show the app rather than the login screen
 authed:         resb 1                  ; this connection is logged in
 auth_busy:      resb 1                  ; a login or sign-up is being checked
+auth_queued:    resb 1                  ; MSG_LOGIN or MSG_REGISTER to send once connected, 0 for none
 restoring:      resb 1                  ; resuming the session saved by the last run
 resync:         resb 1                  ; resubscribe and resend after the next TEAMS
 loaded:         resb 1                  ; the current team's snapshot is complete
@@ -285,6 +302,7 @@ clear_team_view:
     mov [chat_open], al
     mov [chat_count], eax
     mov [unread_count], eax
+    mov [chan_count], eax
     lea rdi, [labels]
     mov ecx, LABEL_SLOTS * LB_SIZE + PROJECT_SLOTS * PJ_SIZE  ; projects follows labels
     rep stosb
@@ -309,6 +327,13 @@ sync_reset:
     jmp clear_team_view
 
 sync_on_open:
+    movzx edi, byte [auth_queued]
+    test edi, edi
+    jz .resume
+    mov byte [auth_queued], 0
+    mov byte [auth_busy], 0
+    jmp do_auth
+.resume:
     mov al, [logged_in]
     or al, [restoring]
     jz .done
@@ -324,10 +349,19 @@ sync_on_open:
     ret
 
 sync_on_offline:
+    call images_offline
+    call attach_failed
     mov byte [authed], 0
     mov byte [auth_busy], 0
     mov byte [password_busy], 0
     mov byte [need_redraw], 1
+    cmp byte [auth_queued], 0
+    je .done
+    mov byte [auth_queued], 0               ; the retry failed too
+    lea rsi, [st_no_server]
+    mov edx, st_no_server_len
+    jmp set_auth_msg
+.done:
     ret
 
 ; rsi = plaintext, rdx = length
@@ -338,7 +372,7 @@ sync_on_message:
     call rd_begin
     call rd_u8
     sub eax, MSG_AUTH_OK
-    cmp eax, MSG_PASSWORD_CHANGED - MSG_AUTH_OK
+    cmp eax, MSG_UPLOAD_READY - MSG_AUTH_OK
     ja .bad
     lea rcx, [.table]
     call [rcx + rax * 8]
@@ -356,7 +390,8 @@ sync_on_message:
 .table:
     dq on_auth_ok, on_auth_fail, on_error, on_teams, on_snapshot, on_event
     dq on_ack, on_members, on_logged_out, on_team_meta, on_issue_detail
-    dq on_chat, on_chat_history, on_unread, on_password_changed
+    dq on_chat, on_chat_history, on_unread, on_password_changed, on_channels
+    dq on_chat_edited, on_chat_deleted, on_image, on_upload_ready
 
 on_auth_ok:
     push rbx
@@ -430,8 +465,11 @@ on_auth_fail:
     ret
 
 on_error:
+    sub rsp, 8
     mov byte [password_busy], 0             ; the likely answer to a change
+    call attach_failed                      ; or to an upload
     call rd_str
+    add rsp, 8
     mov rsi, rax
     jmp set_status
 
@@ -1206,6 +1244,13 @@ send_op:
     lea rsi, [rbx + PO_BODY]
     movzx edx, word [rbx + PO_BODY_LEN]
     call wr_str16
+    cmp byte [rbx + PO_KIND], OP_COMMENT
+    je .image
+    cmp byte [rbx + PO_KIND], OP_MESSAGE
+    jne .send
+.image:
+    mov esi, [rbx + PO_IMAGE]
+    call wr_u32
 .send:
     pop rbx
     jmp send_built
@@ -1339,25 +1384,54 @@ sync_set_description:
     ret
 
 ; A comment on an issue, or a message to the channel or a member.
-; edi = the issue or peer, rsi = text, edx = length, ecx = OP_COMMENT or OP_MESSAGE
-; -> eax = 1 if queued
+; edi = the issue or peer, rsi = text, edx = length, ecx = OP_COMMENT or OP_MESSAGE,
+; r8d = image id or 0, r9d = its width | height << 16 -> eax = 1 if queued
 sync_text:
     push rbx
     push r12
     push r13
+    push r14
+    push r15
     mov ebx, edi
     mov r12, rsi
     mov r13d, edx
+    mov r14d, r8d
+    mov r15d, r9d
     mov edi, ecx
     call new_op
     mov [rax + PO_ISSUE], ebx
+    mov [rax + PO_IMAGE], r14d
+    mov [rax + PO_IMAGE_SIZE], r15d
     mov rsi, r12
     mov edx, r13d
     call draft_body
     call queue_draft
+    pop r15
+    pop r14
     pop r13
     pop r12
     pop rbx
+    ret
+
+; Reads an image ref off the wire. rdi = where it goes
+read_image_ref:
+    push rbx
+    mov rbx, rdi
+    call rd_u32
+    mov [rbx + RI_ID], eax
+    call rd_u16
+    mov [rbx + RI_W], ax
+    call rd_u16
+    mov [rbx + RI_H], ax
+    pop rbx
+    ret
+
+; A pending comment's or message's image, as a ref. rdi = where it goes, rsi = the op
+op_image_ref:
+    mov eax, [rsi + PO_IMAGE]
+    mov [rdi + RI_ID], eax
+    mov eax, [rsi + PO_IMAGE_SIZE]
+    mov [rdi + RI_W], eax
     ret
 
 ; edi = issue
@@ -1636,6 +1710,10 @@ read_message:
     lea rdi, [rbx + CH_TEXT]
     mov rsi, rax
     call put_mem
+    call rd_u8
+    mov [rbx + CH_EDITED], al
+    lea rdi, [rbx + CH_IMAGE]
+    call read_image_ref
     jmp .done
 .bad:
     mov byte [rd_bad], 1
@@ -1660,11 +1738,12 @@ on_chat:
     jne .done
     cmp ebx, [current_team]
     jne .done
-    ; The conversation it's in, from our side: the channel, whoever we
-    ; sent it to, or whoever sent it to us.
+    ; The conversation it's in, from our side: a channel, whoever we sent
+    ; it to, or whoever sent it to us.
     mov r12d, eax
     test r12d, r12d
     jz .have_peer
+    js .have_peer                           ; another channel
     mov r13d, [rsp + CH_AUTHOR]
     cmp r13d, [my_id]
     je .have_peer
@@ -1830,6 +1909,10 @@ rebuild_chat:
     call unix_now
     mov [r12 + CH_CREATED], eax
     mov byte [r12 + CH_PENDING], 1
+    mov byte [r12 + CH_EDITED], 0
+    lea rdi, [r12 + CH_IMAGE]
+    mov rsi, rbx
+    call op_image_ref
     movzx ecx, word [rbx + PO_BODY_LEN]
     mov [r12 + CH_LEN], cx
     lea rdi, [r12 + CH_TEXT]
@@ -1886,9 +1969,15 @@ sync_auth:
 .done:
     ret
 .no_server:
-    lea rsi, [st_no_server]
-    mov edx, st_no_server_len
-    jmp set_auth_msg
+    ; The server drops a connection that hasn't logged in after 30 seconds,
+    ; so a login screen left open is often mid-reconnect. Try right away and
+    ; send this once we're through.
+    mov [auth_queued], dil
+    mov byte [auth_busy], 1
+    mov dword [auth_msg_len], 0
+    mov qword [net_retry_at], 0
+    mov byte [need_redraw], 1
+    ret
 
 ; edi = issue id -> rax = its row in view_issues, or 0
 find_view_issue:
@@ -2077,6 +2166,9 @@ rebuild_view:
     mov [r12 + CC_CREATED], eax
     mov byte [r12 + CC_PENDING], 1
     mov byte [r12 + CC_EDITED], 0
+    lea rdi, [r12 + CC_IMAGE]
+    mov rsi, rbx
+    call op_image_ref
     movzx ecx, word [rbx + PO_BODY_LEN]
     mov [r12 + CC_LEN], cx
     lea rdi, [r12 + CC_TEXT]

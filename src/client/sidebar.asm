@@ -1,5 +1,5 @@
-; The sidebar: the account, the teams with their views and channels, the
-; projects and the members.
+; The sidebar: the account, the teams with their views, the projects, the
+; channels and direct messages.
 
 section .bss
 side_scroll:    resd 1
@@ -120,6 +120,48 @@ side_heading:
     mov r8d, INK(C_FAINT, ST_SMALL)
     jmp draw_text
 
+; A "+" at the end of a section heading. edi = heading y, esi = action, edx = arg
+side_plus:
+    push rbx
+    push r12
+    push r13
+    mov ebx, edi
+    mov r12d, esi
+    mov r13d, edx
+    mov edi, esi
+    mov esi, edx
+    call hovering
+    mov r8d, C_FAINT
+    mov ecx, C_TEXT
+    test eax, eax
+    cmovnz r8d, ecx
+    push r8
+    push r8
+    mov edi, SIDEBAR_W - 30
+    lea esi, [ebx + 7]
+    mov edx, 2
+    mov ecx, 10
+    call fill_rect
+    mov edi, SIDEBAR_W - 34
+    lea esi, [ebx + 11]
+    mov edx, 10
+    mov ecx, 2
+    mov r8d, [rsp]
+    call fill_rect
+    pop r8
+    pop r8
+    mov edi, SIDEBAR_W - 40
+    mov esi, ebx
+    mov edx, 24
+    mov ecx, 24
+    mov r8d, r12d
+    mov r9d, r13d
+    call add_hit
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
 ; The sidebar: who's logged in and the new issue button, then the teams,
 ; projects and members, which scroll when they don't fit.
 draw_sidebar:
@@ -210,6 +252,8 @@ draw_sidebar:
     mov edi, eax
     call draw_side_projects
     mov edi, eax
+    call draw_side_channels
+    mov edi, eax
     call draw_side_members
 .measured:
     sub eax, ebx
@@ -292,32 +336,10 @@ draw_side_teams:
     lea rsi, [s_your_teams]
     mov edx, s_your_teams_len
     call side_heading
-    mov edi, A_NEW_TEAM                     ; "+" to make another
-    xor esi, esi
-    call hovering
-    mov r8d, C_FAINT
-    mov ecx, C_TEXT
-    test eax, eax
-    cmovnz r8d, ecx
-    mov [rsp], r8d
-    mov edi, SIDEBAR_W - 30
-    lea esi, [ebx + 7]
-    mov edx, 2
-    mov ecx, 10
-    call fill_rect
-    mov edi, SIDEBAR_W - 34
-    lea esi, [ebx + 11]
-    mov edx, 10
-    mov ecx, 2
-    mov r8d, [rsp]
-    call fill_rect
-    mov edi, SIDEBAR_W - 40
-    mov esi, ebx
-    mov edx, 24
-    mov ecx, 24
-    mov r8d, A_NEW_TEAM
-    xor r9d, r9d
-    call add_hit
+    mov edi, ebx                            ; "+" to make another
+    mov esi, A_NEW_TEAM
+    xor edx, edx
+    call side_plus
     add ebx, 28
 
     lea r12, [teams]
@@ -342,11 +364,21 @@ draw_side_teams:
     mov ecx, 1
     mov r8d, INK(0xffffff, ST_SMALL)
     call draw_text
+    mov r9d, SIDEBAR_W - 68
+    mov eax, [r12 + CO_ID]
+    cmp eax, [current_team]
+    jne .name
+    mov edi, ebx
+    call draw_settings_link
+    mov r9d, eax                            ; the name stops short of the link
+    sub r9d, 44 + 8
+.name:
     mov edi, 44
-    mov esi, ebx
+    lea esi, [ebx + 19]
     lea rdx, [r12 + CO_NAME]
     movzx ecx, byte [r12 + CO_NAME_LEN]
-    call side_text
+    mov r8d, INK(C_TEXT, ST_BODY)
+    call draw_text_fit
     add ebx, 30
     mov eax, [r12 + CO_ID]
     cmp eax, [current_team]
@@ -369,7 +401,41 @@ draw_side_teams:
     pop rbx
     ret
 
-; The current team's views and its channel, indented.
+; "Settings" on the current team's row, brighter while hovered.
+; edi = row y -> eax = the link's left x
+draw_settings_link:
+    push rbx
+    push r12
+    push r13
+    mov ebx, edi
+    mov edi, A_SETTINGS
+    mov esi, F_NONE
+    call hovering
+    mov r8d, C_FAINT
+    mov ecx, C_TEXT
+    test eax, eax
+    cmovnz r8d, ecx
+    mov edi, SIDEBAR_W - 18
+    lea esi, [ebx + 19]
+    lea rdx, [s_settings]
+    mov ecx, s_settings_len
+    call draw_link
+    mov r12d, eax
+    mov r13d, edx
+    lea edi, [r12d - 6]
+    mov esi, ebx
+    lea edx, [r13d + 12]
+    mov ecx, 28
+    mov r8d, A_SETTINGS
+    mov r9d, F_NONE
+    call add_hit
+    mov eax, r12d
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; The current team's views, indented.
 ; edi = top -> eax = the y under them
 draw_team_views:
     push rbx
@@ -379,7 +445,7 @@ draw_team_views:
     xor r14d, r14d
 .team_view:
     cmp r14d, V_MINE
-    jae .channel
+    jae .views_done
     cmp [view_mode], r14d
     jne .not_current
     cmp dword [filter_project], 0
@@ -408,21 +474,7 @@ draw_team_views:
     add ebx, 30
     inc r14d
     jmp .team_view
-.channel:
-    mov edi, ebx
-    xor esi, esi
-    mov edx, SIDEBAR_W - 26
-    call chat_side_row
-    mov r8d, INK(C_TEXT, ST_BODY)
-    mov eax, INK(0xffffff, ST_MEDIUM)       ; unread
-    test ecx, ecx
-    cmovnz r8d, eax
-    mov edi, 52
-    lea esi, [ebx + 19]
-    lea rdx, [s_general]
-    mov ecx, s_general_len
-    call draw_text
-    add ebx, 30
+.views_done:
     mov eax, ebx
     add rsp, 8
     pop r14
@@ -489,8 +541,9 @@ draw_side_projects:
     pop rbx
     ret
 
-; The team's members, with remove or leave links, and the invite box for
-; owners. edi = top -> eax = the y under them
+; Everyone else on the team, each row opening a conversation with them.
+; Owners get a "+" to invite people, and an invite row while they're alone.
+; edi = top -> eax = the y under them
 draw_side_members:
     push rbx
     push rbp
@@ -500,34 +553,38 @@ draw_side_members:
     push r15
     sub rsp, 8
     lea ebx, [edi + 12]
+    call am_owner
+    mov ebp, eax
     mov edi, ebx
-    lea rsi, [s_members]
-    mov edx, s_members_len
+    lea rsi, [s_direct_messages]
+    mov edx, s_direct_messages_len
     call side_heading
+    test ebp, ebp
+    jz .heading_done
+    mov edi, ebx
+    mov esi, A_SETTINGS
+    mov edx, F_MEMBER
+    call side_plus
+.heading_done:
     add ebx, 28
-    call current_team_row
-    xor ebp, ebp                            ; we own this team
-    test rax, rax
-    jz .member_rows
-    cmp byte [rax + CO_ROLE], ROLE_OWNER
-    sete bpl
-.member_rows:
     lea r12, [members]
     mov r13d, [member_count]
+    xor r15d, r15d                          ; rows drawn
 .member:
     test r13d, r13d
-    jz .invite
+    jz .alone
+    mov eax, [r12 + CM_ID]
+    cmp eax, [my_id]
+    je .next_member
     mov edi, ebx                            ; the row opens a conversation with them
-    mov esi, [r12 + CM_ID]
-    mov edx, SIDEBAR_W - 72
+    mov esi, eax
+    mov edx, SIDEBAR_W - 26
     call chat_side_row
     mov [rsp], eax                          ; the row's background
-    mov r14d, INK(C_TEXT, ST_BODY)          ; how their name reads, and its room
-    mov r15d, SIDEBAR_W - 110
+    mov r14d, INK(C_TEXT, ST_BODY)
     test ecx, ecx
     jz .avatar
-    mov r14d, INK(0xffffff, ST_MEDIUM)      ; unread, and the dot takes some room
-    mov r15d, SIDEBAR_W - 124
+    mov r14d, INK(0xffffff, ST_MEDIUM)      ; unread
 .avatar:
     mov edi, 16
     lea esi, [ebx + 5]
@@ -554,71 +611,34 @@ draw_side_members:
     lea rdx, [r12 + CM_NAME]
     movzx ecx, byte [r12 + CM_NAME_LEN]
     mov r8d, r14d
-    mov r9d, r15d
+    mov r9d, SIDEBAR_W - 86
     call draw_text_fit
-    cmp byte [r12 + CM_ROLE], ROLE_OWNER
-    jne .member_action
-    mov edi, SIDEBAR_W - 60
-    lea esi, [ebx + 19]
-    lea rdx, [s_owner]
-    mov ecx, s_owner_len
-    mov r8d, INK(C_FAINT, ST_SMALL)
-    call draw_text
-    jmp .next_member
-.member_action:
-    ; Owners can remove others, and anyone else can leave.
-    mov eax, [r12 + CM_ID]
-    cmp eax, [my_id]
-    je .leave
-    test ebp, ebp
-    jz .next_member
-    lea r14, [s_remove]
-    mov r15d, s_remove_len
-    mov r8d, A_REMOVE
-    mov r9d, eax
-    jmp .action_link
-.leave:
-    test ebp, ebp
-    jnz .next_member
-    lea r14, [s_leave]
-    mov r15d, s_leave_len
-    mov r8d, A_LEAVE
-    xor r9d, r9d
-.action_link:
-    push r8
-    push r9
-    mov edi, SIDEBAR_W - 64
-    mov esi, ebx
-    mov edx, 56
-    mov ecx, 28
-    call add_hit
-    pop rsi
-    pop rdi
-    call hovering
-    mov r8d, INK(C_FAINT, ST_SMALL)
-    mov ecx, INK(C_DANGER, ST_SMALL)
-    test eax, eax
-    cmovnz r8d, ecx
-    mov edi, SIDEBAR_W - 60
-    lea esi, [ebx + 19]
-    mov rdx, r14
-    mov ecx, r15d
-    call draw_text
-.next_member:
     add ebx, 28
+    inc r15d
+.next_member:
     add r12, CM_SIZE
     dec r13d
     jmp .member
-.invite:
+.alone:
+    test r15d, r15d
+    jnz .done
     test ebp, ebp
     jz .done
-    add ebx, 4
-    mov edi, F_MEMBER
-    mov esi, 12
-    mov edx, ebx
-    mov ecx, SIDEBAR_W - 24
-    call draw_field_box
-    add ebx, 36
+    mov edi, ebx
+    mov esi, A_SETTINGS
+    mov edx, F_MEMBER
+    call side_row
+    mov dword [pi_item + MI_ICON], IC_PLUS
+    lea rdi, [pi_item]
+    mov esi, 16
+    lea edx, [ebx + 5]
+    call draw_item_icon
+    mov edi, 44
+    mov esi, ebx
+    lea rdx, [s_invite_people]
+    mov ecx, s_invite_people_len
+    call side_text
+    add ebx, 28
 .done:
     mov eax, ebx
     add rsp, 8

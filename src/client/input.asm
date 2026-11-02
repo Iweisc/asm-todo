@@ -103,6 +103,12 @@ run_command:
     je .labels
     cmp ebx, CMD_PASSWORD
     je .password
+    cmp ebx, CMD_SETTINGS
+    je .settings
+    cmp ebx, CMD_INVITE
+    je .invite
+    cmp ebx, CMD_NEW_CHANNEL
+    je .new_channel
     cmp ebx, CMD_NEW_ISSUE
     je .new_issue
     cmp ebx, CMD_LAYOUT
@@ -141,6 +147,18 @@ run_command:
     jmp .done
 .password:
     call open_password_modal
+    jmp .done
+.settings:
+    mov edi, F_NONE
+    call open_team_settings
+    jmp .done
+.invite:
+    mov edi, F_MEMBER
+    call open_team_settings
+    jmp .done
+.new_channel:
+    xor edi, edi
+    call open_channel_dialog
     jmp .done
 .new_issue:
     call default_status
@@ -255,22 +273,44 @@ logout:
     mov dword [focus], F_USER
     ret
 
+; Clicking anything but a Delete that's asking backs out of it.
+; edi = the action clicked. Clobbers only eax.
+disarm_others:
+    xor eax, eax
+    cmp edi, A_DELETE
+    je .comment
+    mov [delete_armed], eax
+.comment:
+    cmp edi, A_DELETE_COMMENT
+    je .member
+    mov [comment_armed], eax
+.member:
+    cmp edi, A_REMOVE
+    je .channel
+    cmp edi, A_LEAVE
+    je .channel
+    mov [member_armed], eax
+.channel:
+    cmp edi, A_DELETE_CHANNEL
+    je .message
+    mov [chan_armed], al
+.message:
+    cmp edi, A_DELETE_MESSAGE
+    je .done
+    mov [message_armed], eax
+.done:
+    ret
+
 ; A button press: does whatever the region under the pointer is for.
 ui_click:
     call update_hover
     mov byte [need_redraw], 1
     mov dword [status_len], 0               ; clicking dismisses the message
+    mov edi, [hover_action]
+    call disarm_others
     mov eax, [hover_action]
     mov edi, [hover_arg]
-    cmp eax, A_DELETE
-    je .armed
-    mov dword [delete_armed], 0             ; any other click backs out of deleting
-.armed:
-    cmp eax, A_DELETE_COMMENT
-    je .comment_armed
-    mov dword [comment_armed], 0
-.comment_armed:
-    cmp eax, A_CHANGE_PASSWORD
+    cmp eax, A_DROP_ATTACHMENT
     ja .done
     jmp [.table + rax * 8]
 .table:
@@ -279,6 +319,9 @@ ui_click:
     dq .unfilter, .pick, choose_item, .dismiss, submit_create, submit_team, close_detail, .delete
     dq .row_status, .row_priority, open_chat, .nothing, start_comment_edit, click_delete_comment
     dq .dismiss, start_rename, click_remove_named, submit_password
+    dq open_team_settings, submit_invite, click_set_role, save_team_name
+    dq open_channel_dialog, submit_channel, click_delete_channel
+    dq .nothing, start_message_edit, click_delete_message, open_image_view, attach_drop
 .nothing:
     ; Clicking empty space leaves whatever field was being edited.
     cmp dword [focus], F_PASS
@@ -314,10 +357,10 @@ ui_click:
 .create:
     jmp open_create
 .remove:
-    jmp sync_remove_member
+    jmp click_remove_member
 .leave:
     mov edi, [my_id]
-    jmp sync_remove_member
+    jmp click_remove_member
 .issue:
     cmp byte [board], 0
     je open_issue
@@ -439,9 +482,11 @@ ui_release:
 ui_scroll:
     cmp byte [menu_open], 0
     jne .menu
+    lea edi, [edi + edi * 2]
+    cmp byte [modal], M_SETTINGS
+    je .settings
     cmp byte [modal], M_NONE
     jne .done
-    lea edi, [edi + edi * 2]
     cmp dword [pointer_x], SIDEBAR_W
     jl .sidebar
     cmp byte [chat_open], 0
@@ -459,6 +504,9 @@ ui_scroll:
     jmp .redraw
 .sidebar:
     lea rax, [side_scroll]
+    jmp .vertical
+.settings:
+    lea rax, [settings_scroll]
     jmp .vertical
 .detail:
     lea rax, [detail_scroll]
@@ -551,12 +599,20 @@ field_command:
     je .password
     cmp ebx, F_NEW_PASS
     je .password
+    cmp ebx, F_TEAM_RENAME
+    je .team_name
+    cmp ebx, F_CHANNEL
+    je .channel
     test eax, MOD_CTRL                      ; descriptions: Ctrl+Enter finishes
     jz .newline
     cmp ebx, F_NEW_DESC
     je .create
     jmp .unfocus
 .newline:
+    mov edi, ebx
+    mov esi, UK_TYPE
+    mov edx, 1
+    call undo_note
     mov edi, ebx
     mov esi, 10
     call field_insert
@@ -581,12 +637,13 @@ field_command:
     call submit_team
     jmp .handled
 .member:
-    ; The box empties when the name joins, so a failed invite keeps it.
-    mov edi, F_MEMBER
-    call field_trimmed
-    test edx, edx
-    jz .handled
-    call sync_add_member
+    call submit_invite
+    jmp .handled
+.team_name:
+    call save_team_name
+    jmp .handled
+.channel:
+    call submit_channel
     jmp .handled
 .comment:
     test eax, MOD_SHIFT
@@ -599,7 +656,7 @@ field_command:
 .edit:
     test eax, MOD_SHIFT
     jnz .newline
-    call save_comment_edit
+    call save_edit
     jmp .handled
 .rename:
     call save_rename
@@ -661,6 +718,8 @@ field_escape:
     je stop_rename
     cmp edi, F_OLD_PASS
     jae close_modal
+    cmp edi, F_MEMBER
+    je close_modal
     cmp edi, F_TEAM_KEY
     ja .unfocus
     mov byte [modal], M_NONE                ; F_NEW_TITLE..F_TEAM_KEY
@@ -673,26 +732,46 @@ field_escape:
     mov dword [focus], F_NONE               ; a title edit is dropped, not saved
     ret
 
-; Sends a comment or message box's text and empties the box.
+; Sends a comment or message box's text and image, and empties the box.
 ; edi = field, esi = the issue or peer, edx = OP_COMMENT or OP_MESSAGE
 send_field:
     push rbx
     push r12
     push r13
+    push r14
+    push r15
     mov ebx, edi
     mov r12d, esi
     mov r13d, edx
+    call attachment_to_send
+    cmp eax, -1
+    je .done
+    mov r14d, eax
+    mov edi, ebx
     call field_trimmed
-    test edx, edx
-    jz .done
+    mov r15, rsi
+    mov ecx, edx
+    or ecx, r14d
+    jz .done                                ; nothing to send
+    xor r9d, r9d
+    test r14d, r14d
+    jz .send
+    mov r9d, [att_h]
+    shl r9d, 16
+    or r9d, [att_w]
+.send:
     mov edi, r12d
+    mov rsi, r15
     mov ecx, r13d
+    mov r8d, r14d
     call sync_text
     test eax, eax
     jz .done
     mov edi, ebx
     call field_clear
 .done:
+    pop r15
+    pop r14
     pop r13
     pop r12
     pop rbx
@@ -915,8 +994,11 @@ ui_key:
     mov eax, r12d
     jmp .out
 .shortcut:
+    cmp byte [modal], M_NONE
+    jne .plain_shortcut                     ; an image opened over the conversation
     cmp byte [chat_open], 0
     jne .chat_key
+.plain_shortcut:
     mov edi, ebx
     call shortcut
     jmp .out

@@ -4,6 +4,7 @@
 %define SYS_write           1
 %define SYS_open            2
 %define SYS_close           3
+%define SYS_fstat           5
 %define SYS_poll            7
 %define SYS_lseek           8
 %define SYS_getsockopt      55
@@ -31,6 +32,8 @@
 %define SYS_memfd_create    319
 %define SYS_getrandom       318
 %define SYS_pipe2           293
+%define SYS_pread64         17
+%define SYS_unlink          87
 
 %define EINTR               4
 %define ENOENT              2
@@ -43,8 +46,14 @@
 %define O_CREAT             0x40
 %define O_TRUNC             0x200
 %define O_APPEND            0x400
+%define O_NONBLOCK          0x800
 %define O_DIRECTORY         0x10000
 %define O_CLOEXEC           0x80000
+
+%define STAT_SIZE           144
+%define STAT_MODE           24          ; u32 in struct stat
+%define S_IFMT              0o170000
+%define S_IFREG             0o100000
 
 %define AF_UNIX             1
 %define AF_INET             2
@@ -65,6 +74,7 @@
 %define PROT_RW             3
 %define MAP_SHARED          1
 %define MAP_PRIVATE         2
+%define MAP_ANONYMOUS       0x20
 %define MFD_CLOEXEC         1
 
 %define POLLIN              1

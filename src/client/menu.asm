@@ -28,6 +28,9 @@ text c_log_out,         "Log out"
 text c_copy_id,         "Copy issue ID"
 text c_labels_manage,   "Manage labels and projects"
 text c_password,        "Change password"
+text c_settings,        "Team settings"
+text c_invite,          "Invite people"
+text c_new_channel,     "New channel"
 
 %define ISSUE_RESULTS   20              ; issues the command menu lists for a search
 
@@ -76,6 +79,9 @@ commands:
     COMMAND c_filter, CMD_FILTER, 0, WHEN_ALWAYS
     COMMAND c_clear, CMD_CLEAR, 0, WHEN_FILTERED
     COMMAND c_labels_manage, CMD_LABELS, 0, WHEN_ALWAYS
+    COMMAND c_new_channel, CMD_NEW_CHANNEL, 0, WHEN_ALWAYS
+    COMMAND c_invite, CMD_INVITE, 0, WHEN_ALWAYS
+    COMMAND c_settings, CMD_SETTINGS, 0, WHEN_ALWAYS
     COMMAND c_new_team, CMD_NEW_TEAM, 0, WHEN_ALWAYS
     COMMAND c_password, CMD_PASSWORD, 0, WHEN_ALWAYS
     COMMAND c_log_out, CMD_LOGOUT, 0, WHEN_ALWAYS

@@ -80,6 +80,22 @@ handle_message:
     je .open_issue
     cmp eax, MSG_OPEN_CHAT
     je .open_chat
+    cmp eax, MSG_SET_ROLE
+    je .set_role
+    cmp eax, MSG_RENAME_TEAM
+    je .rename_team
+    cmp eax, MSG_SET_CHANNEL
+    je .set_channel
+    cmp eax, MSG_EDIT_MESSAGE
+    je .edit_message
+    cmp eax, MSG_DELETE_MESSAGE
+    je .delete_message
+    cmp eax, MSG_UPLOAD_IMAGE
+    je .upload_image
+    cmp eax, MSG_IMAGE_PART
+    je .image_part
+    cmp eax, MSG_GET_IMAGE
+    je .get_image
     cmp eax, MSG_OP
     je .op
 .violation:
@@ -126,6 +142,30 @@ handle_message:
     jmp .done
 .open_chat:
     call h_open_chat
+    jmp .done
+.set_role:
+    call h_set_role
+    jmp .done
+.rename_team:
+    call h_rename_team
+    jmp .done
+.set_channel:
+    call h_set_channel
+    jmp .done
+.edit_message:
+    call h_edit_message
+    jmp .done
+.delete_message:
+    call h_delete_message
+    jmp .done
+.upload_image:
+    call h_upload_image
+    jmp .done
+.image_part:
+    call h_image_part
+    jmp .done
+.get_image:
+    call h_get_image
     jmp .done
 .op:
     call h_op

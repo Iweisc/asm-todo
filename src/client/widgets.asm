@@ -71,8 +71,11 @@ user_name:
     ret
 
 ; rdi = cursor -> rdi advanced past the open conversation's name:
-; "#general" or the member's
+; "#general", another channel's or the member's
 put_chat_name:
+    mov esi, [chat_peer]
+    test esi, esi
+    js put_channel_name
     push rdi
     lea rsi, [s_general]
     mov edx, s_general_len

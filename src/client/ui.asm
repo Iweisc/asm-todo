@@ -80,6 +80,8 @@
 %define KEY_S           31
 %define KEY_V           47
 %define KEY_X           45
+%define KEY_Y           21
+%define KEY_Z           44
 
 ; wl_keyboard modifier bits
 %define MOD_SHIFT       1
@@ -106,6 +108,11 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define FF_MASKED       1
 %define FF_MULTILINE    2
 
+; Kinds of edit, which undo.asm groups into steps
+%define UK_TYPE         1
+%define UK_DELETE       2
+%define UK_OTHER        3               ; paste or cut: a step each
+
 %define F_NONE          -1
 %define F_USER          0
 %define F_PASS          1
@@ -123,6 +130,8 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define F_RENAME        13              ; a label or project's name
 %define F_OLD_PASS      14              ; changing your password
 %define F_NEW_PASS      15
+%define F_TEAM_RENAME   16              ; the team's name in its settings
+%define F_CHANNEL       17              ; a channel's name
 
 ; Clickable regions
 %define HIT_X           0
@@ -168,6 +177,18 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define A_RENAME        31              ; arg = label or project item, see labels.asm
 %define A_REMOVE_NAMED  32              ; arg = label or project item
 %define A_CHANGE_PASSWORD 33
+%define A_SETTINGS      34              ; arg = the field to focus, F_NONE for none
+%define A_INVITE        35
+%define A_SET_ROLE      36              ; arg = user id, switches them between owner and member
+%define A_SAVE_TEAM_NAME 37
+%define A_CHANNEL_DIALOG 38             ; arg = the channel's slot, 0 for a new one
+%define A_SAVE_CHANNEL  39
+%define A_DELETE_CHANNEL 40
+%define A_MESSAGE       41              ; arg = message id, shows its actions on hover
+%define A_EDIT_MESSAGE  42              ; arg = message id
+%define A_DELETE_MESSAGE 43             ; arg = message id
+%define A_IMAGE         44              ; arg = image id, opens it
+%define A_DROP_ATTACHMENT 45            ; arg = the field whose attachment goes
 
 ; Views of a team's issues
 %define V_ALL           0
@@ -181,6 +202,9 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define M_TEAM          2
 %define M_LABELS        3
 %define M_PASSWORD      4
+%define M_SETTINGS      5
+%define M_CHANNEL       6
+%define M_IMAGE         7
 
 ; Menus. The first five are one less than the FIELD_* they change.
 %define MK_STATUS       0
@@ -222,6 +246,9 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define CMD_COPY_ID     (CMD_CHAT + 1)
 %define CMD_LABELS      (CMD_COPY_ID + 1)
 %define CMD_PASSWORD    (CMD_LABELS + 1)
+%define CMD_SETTINGS    (CMD_PASSWORD + 1)
+%define CMD_INVITE      (CMD_SETTINGS + 1)
+%define CMD_NEW_CHANNEL (CMD_INVITE + 1)
 %define CMD_ISSUE       0x40000000      ; + issue id, opens it
 
 ; Filter menu values. Labels are ~slot and projects their number.
@@ -272,7 +299,7 @@ fields:
     FIELD new_desc_buf, DESC_MAX, FF_MULTILINE, ST_BODY, s_desc_hint
     FIELD team_name_buf, TEAMNAME_MAX, 0, ST_BODY, s_team_name_hint
     FIELD team_key_buf, TEAM_KEY_MAX, 0, ST_BODY, s_team_key_hint
-    FIELD member_buf, USERNAME_MAX, 0, ST_SMALL, s_member_hint
+    FIELD member_buf, USERNAME_MAX, 0, ST_BODY, s_member_hint
     FIELD title_buf, TITLE_MAX, 0, ST_TITLE, s_title_hint
     FIELD desc_buf, DESC_MAX, FF_MULTILINE, ST_BODY, s_desc_hint
     FIELD comment_buf, COMMENT_MAX, FF_MULTILINE, ST_BODY, s_comment_hint
@@ -281,6 +308,8 @@ fields:
     FIELD rename_buf, PROJECT_NAME_MAX, 0, ST_BODY, s_rename_field_hint
     FIELD old_pass_buf, PASSWORD_MAX, FF_MASKED, ST_BODY, s_password
     FIELD new_pass_buf, PASSWORD_MAX, FF_MASKED, ST_BODY, s_password
+    FIELD team_rename_buf, TEAMNAME_MAX, 0, ST_BODY, s_team_name_hint
+    FIELD channel_buf, CHANNEL_NAME_MAX, 0, ST_BODY, s_channel_field_hint
 
 focus:          dd F_USER
 filter_label:   dd -1                   ; a label slot, or -1
@@ -307,6 +336,7 @@ edit_buf:       resb COMMENT_MAX
 rename_buf:     resb PROJECT_NAME_MAX   ; the longer of a label's and a project's
 old_pass_buf:   resb PASSWORD_MAX
 new_pass_buf:   resb PASSWORD_MAX
+team_rename_buf: resb TEAMNAME_MAX
 mask_buf:       resb PASSWORD_MAX       ; a row of '*' for the password field
 alignb 8
 server_label:   resq 1                  ; "ip:port" for the status line
@@ -388,6 +418,8 @@ field_addr:
 ; edi = field -> rax = its struct. Wipes the text too, which matters for the password.
 field_clear:
     push rbx
+    call undo_drop
+    call attach_drop
     call field_addr
     mov rbx, rax
     mov rdi, [rbx + FD_BUF]
@@ -537,6 +569,10 @@ ui_logged_in:
 ui_logged_out:
     sub rsp, 8
     call close_dialogs
+    call undo_wipe
+    call images_reset
+    mov edi, [att_field]
+    call attach_drop
     mov dword [focus], F_USER
     add rsp, 8
     ret
@@ -575,10 +611,16 @@ ui_team_opened:
     mov [modal], al                         ; the team we were creating is here
 .labels:
     cmp byte [modal], M_LABELS              ; its slots are the old team's
+    je .old_team
+    cmp byte [modal], M_SETTINGS
+    je .old_team
+    cmp byte [modal], M_CHANNEL
     jne .draft
+.old_team:
     call stop_rename
     call close_modal
 .draft:
+    mov byte [chan_open_new], 0
     mov edi, F_MESSAGE                      ; drafts belong to the old team
     call field_clear
     mov edi, F_MEMBER
@@ -705,6 +747,8 @@ update_hover:
     cmp r8d, A_DISMISS
     cmove edi, eax
     cmp r8d, A_COMMENT
+    cmove edi, eax
+    cmp r8d, A_MESSAGE
     cmove edi, eax
     mov eax, CURSOR_TEXT
     cmp r8d, A_FIELD

@@ -10,7 +10,9 @@ text s_active,          "Active"
 text s_projects,        "Projects"
 text s_members,         "Members"
 text s_remove,          "Remove"
-text s_leave,           "Leave"
+text s_direct_messages, "Direct messages"
+text s_invite_people,   "Invite people"
+text s_settings,        "Settings"
 text s_log_out,         "Log out"
 text s_all_issues,      "All issues"
 text s_active_issues,   "Active issues"
@@ -48,7 +50,6 @@ text s_label_is,        "Label: "
 text s_project_is,      "Project: "
 text s_priority_is,     "Priority: "
 text s_assignee_is,     "Assignee: "
-text s_owner,           "owner"
 text s_connected_to,    "Connected to "
 text s_connecting_to,   "Connecting to "
 text s_offline,         "Offline, retrying in "
@@ -596,6 +597,12 @@ draw_header:
     jmp .done
 .close:
     lea r14d, [ebx + r13d - 44]
+    cmp byte [chat_open], 0
+    je .close_button
+    mov edi, r14d
+    mov esi, r12d
+    call draw_channel_edit_link
+.close_button:
     mov edi, A_CLOSE
     xor esi, esi
     call hovering
@@ -2106,6 +2113,13 @@ draw_comment_box:
     mov r12d, esi
     mov r15d, edx
     mov edi, F_COMMENT
+    mov esi, r14d
+    mov edx, r12d
+    call draw_attachment
+    mov edi, F_COMMENT
+    call attachment_height
+    add r12d, eax                           ; the box goes under it
+    mov edi, F_COMMENT
     call field_addr
     mov rdi, [rax + FD_BUF]
     mov esi, [rax + FD_LEN]
@@ -2588,8 +2602,23 @@ draw_app:
     jmp .done
 .password_modal:
     cmp byte [modal], M_PASSWORD
-    jne .done
+    jne .settings_modal
     call draw_password_modal
+    jmp .done
+.settings_modal:
+    cmp byte [modal], M_SETTINGS
+    jne .channel_modal
+    call draw_team_settings
+    jmp .done
+.channel_modal:
+    cmp byte [modal], M_CHANNEL
+    jne .image_modal
+    call draw_channel_dialog
+    jmp .done
+.image_modal:
+    cmp byte [modal], M_IMAGE
+    jne .done
+    call draw_image_view
 .done:
     pop r15
     pop r14
@@ -2636,7 +2665,8 @@ draw_frame:
 .overlays:
     call draw_toast
     cmp byte [menu_open], 0
-    je .done
+    je .pump
     call draw_menu
-.done:
-    ret
+.pump:
+    jmp images_pump                         ; what this frame wanted to show
+

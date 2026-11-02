@@ -30,7 +30,9 @@ The server prints its public key at startup and writes it to `<database-path>.pu
 
 ## Using it
 
-Sign up or log in, then create a team. "Change password" in the command menu changes yours and logs out your other sessions. Its identifier (like `ENG`) prefixes issue IDs like `ENG-12`. Owners invite people by username from the sidebar and can remove them. Other members can leave.
+Sign up or log in, then create a team. Its identifier (like `ENG`) prefixes issue IDs like `ENG-12`. "Change password" in the command menu changes yours and logs out your other sessions.
+
+"Settings" on the team's sidebar row opens its settings. Owners rename the team there, invite people by username, make members owners or owners members, and remove people. Anyone can leave, except the last owner. Remove and Leave ask first. The "+" next to Direct messages opens the same dialog at the invite box.
 
 Issues have a status (Backlog, Todo, In Progress, Done, Canceled), a priority, an assignee, a project, up to 16 labels, a description and comments. The list groups them by status, and the board shows a column per status. The sidebar switches between all issues, active ones, the backlog, your own issues and a single project. The filter bar narrows any of these by label, project, priority or assignee.
 
@@ -38,7 +40,11 @@ Drag a card on the board to another column to change its status. Esc while dragg
 
 Clicking an issue opens it. Click its title or description to edit them, and use the properties on the right to change the rest. Comments show up live for everyone viewing the issue. Hover over your own comment to edit or delete it. Team owners can delete anyone's.
 
-Each team has a `#general` channel, and clicking a member in the sidebar opens a direct conversation with them. Messages arrive live, and a dot marks conversations with messages you haven't seen yet, even after a restart. Opening a conversation loads its newest 100 messages. Messages can be up to 500 characters, and each server keeps the newest 32,768 across all teams.
+Each team has a `#general` channel, and anyone in it can make up to 16 more with the "+" next to Channels. "Edit channel" in a channel's header renames or deletes it, for whoever made it and for owners. Deleting one deletes its messages. Clicking someone under Direct messages opens a conversation with them. Messages arrive live, and a dot marks conversations with messages you haven't seen yet, even after a restart. Opening a conversation loads its newest 100 messages. Messages can be up to 500 characters, and each server keeps the newest 32,768 across all teams.
+
+Hover over your own message to edit or delete it. Owners can delete anyone's in a channel, but not in someone else's direct conversation. Edited messages say so.
+
+Paste an image into the message or comment box with Ctrl+V: a screenshot, an image copied from a browser, or a PNG file copied in a file manager. It uploads while you type, shows above the box with an X to remove it, and goes out with the text on Enter, or on its own. Click an image to see it as big as the window allows, and click or press Esc to close it. Images are PNGs up to 8 MB and 16 megapixels. Deleting the message or comment deletes its image.
 
 Keys, when no text field has focus:
 
@@ -57,7 +63,7 @@ In menus, typing filters and Enter picks. In the label and project menus, typing
 
 The keyboard layout comes from the compositor, so AZERTY, QWERTZ, Dvorak and others type what their keys say, and letter shortcuts follow the letter rather than the key's position. Characters outside ASCII can't be typed yet.
 
-Text fields work like any other app's: Shift with the arrows, Home or End selects, Ctrl moves by word, double-click selects a word and triple-click everything, and dragging selects. Ctrl+A, Ctrl+C, Ctrl+X and Ctrl+V select all, copy, cut and paste through the system clipboard. Ctrl+Backspace and Ctrl+Delete remove a word. Pasted text keeps to printable ASCII: curly quotes, dashes and the like become their plain versions.
+Text fields work like any other app's: Shift with the arrows, Home or End selects, Ctrl moves by word, double-click selects a word and triple-click everything, and dragging selects. Ctrl+A, Ctrl+C, Ctrl+X and Ctrl+V select all, copy, cut and paste through the system clipboard. Ctrl+Backspace and Ctrl+Delete remove a word. Ctrl+Z undoes, a word at a time while typing, and Ctrl+Y or Ctrl+Shift+Z redoes. Password fields keep no history. Pasted text keeps to printable ASCII: curly quotes, dashes and the like become their plain versions.
 
 Dates are shown in the local time zone, from `TZ` or `/etc/localtime`.
 
@@ -69,12 +75,14 @@ Changes and messages made while the server is unreachable show up right away and
 - Passwords: PBKDF2-HMAC-SHA256 with 600,000 iterations and a random 16-byte salt per user. Hashing runs in slices between events, so logins never stall the server. Logins with an unknown username are hashed against a dummy salt, so response time doesn't reveal which usernames exist.
 - Sessions: 256-bit random tokens, stored only as SHA-256 hashes, valid for 30 days, compared in constant time. Logging out revokes the session on every connection using it. Changing a password needs the current one, hashes the new one with a fresh salt, and revokes every other session of the user. It counts against the same per-IP limit as logins.
 - Limits: 10 password checks per IP per minute, 5 failed attempts per connection, 16 connections per IP, 30 seconds to log in, 90 seconds idle. Clients that don't read their messages get disconnected instead of buffered without bound.
-- Authorization: every operation checks team membership on the server, and every field is validated there. Only owners can add or remove members. Removed members stop receiving updates and messages immediately and are unassigned from the team's issues. Direct messages only reach the two people in them.
+- Authorization: every operation checks team membership on the server, and every field is validated there. Only owners can rename the team, add or remove members and change roles, and a team always keeps one owner. Removed members stop receiving updates and messages immediately and are unassigned from the team's issues. Direct messages only reach the two people in them.
 - Storage: the database and its journal are created with mode 0600. The database holds the server's private key. The client's session file is mode 0600 in a 0700 directory, and is replaced by rename so a crash leaves the old one or the new one.
 
 ## Storage
 
-The database is a snapshot plus a journal next to it (`issues.db.log`). Every change is appended to the journal as a checksummed batch and fdatasynced before anyone hears about it. On startup the server replays the journal over the snapshot, drops a torn last batch, then writes a fresh snapshot (temp file, fsync, rename, directory fsync) and starts a new journal. It also compacts once the journal passes 8 MB. A generation number in both files keeps a journal from being replayed over the wrong snapshot. Snapshots carry a format version: version 2 added a comment's edited mark, and the server still loads version 1 and saves it as 2.
+The database is a snapshot plus a journal next to it (`issues.db.log`). Every change is appended to the journal as a checksummed batch and fdatasynced before anyone hears about it. On startup the server replays the journal over the snapshot, drops a torn last batch, then writes a fresh snapshot (temp file, fsync, rename, directory fsync) and starts a new journal. It also compacts once the journal passes 8 MB. A generation number in both files keeps a journal from being replayed over the wrong snapshot. Snapshots carry a format version: version 2 added a comment's edited mark, version 3 added channels and a message's edited mark, and version 4 added images. The server still loads versions 1 to 3 and saves them as 4.
+
+Images are files in a directory beside the database (`issues.db.images/`), one per image, named by its id and created with mode 0600. The database has a row for each, written when its upload starts. A file only counts once the row says every byte arrived, and the last part is fdatasynced first. Uploads the server stopped in the middle of are deleted on startup.
 
 ## Protocol
 
@@ -85,7 +93,9 @@ Sync works like this:
 - Each team has a sequence number that goes up with every change. `SUBSCRIBE` returns the team's labels and projects, then a snapshot of its issues at the current sequence. Every change after that arrives as an `EVENT` with the next number. A client that sees a gap asks for a fresh snapshot.
 - Descriptions and comments aren't in the snapshot. `OPEN_ISSUE` fetches them for one issue, and events keep the open issue current.
 - Comments are changed with `EDIT_COMMENT` (its author only) and `DELETE_COMMENT` (its author or a team owner), which reach viewers of the issue as `COMMENT_EDITED` and `COMMENT_DELETED` events. A comment carries an edited mark once changed.
-- Messages are sent as changes too, but they aren't events and don't move the sequence number. `SUBSCRIBE` also returns `UNREAD`, the conversations with messages the user hasn't seen. `OPEN_CHAT` fetches a conversation's newest messages and marks them seen, and `CHAT` delivers each new message to the connections allowed to read it.
+- Messages are sent as changes too, but they aren't events and don't move the sequence number. `SUBSCRIBE` also returns `CHANNELS` and `UNREAD`, the conversations with messages the user hasn't seen. `OPEN_CHAT` fetches a conversation's newest messages and marks them seen, and `CHAT` delivers each new message to the connections allowed to read it. A conversation is named by its peer: 0 for `#general`, `CHANNEL_PEER` plus a slot for another channel, or the other person.
+- `SET_CHANNEL` makes, renames or deletes a channel, and everyone viewing the team gets the new `CHANNELS`. `EDIT_MESSAGE` and `DELETE_MESSAGE` change a message, and its readers get `CHAT_EDITED` or `CHAT_DELETED`. These, `SET_ROLE` and `RENAME_TEAM` aren't changes in the op queue, so they need a connection.
+- An image is uploaded before the message or comment it goes with: `UPLOAD_IMAGE` gives its size and the conversation it's for, and the server answers each `IMAGE_PART` with `UPLOAD_READY` and the bytes it has, so one part is in flight at a time. The server checks the file starts as a PNG of the size it said. The message or comment then names the image's id, and only its uploader can attach it, once, in that conversation. `GET_IMAGE` downloads one a part at a time, for whoever can read what it's attached to. Messages and comments carry their image's id and size, so clients lay them out before downloading them.
 - Clients number their changes 1, 2, 3 per session. The server applies them in order and remembers the last one per session, so a change resent after a dropped connection is acknowledged without being applied twice.
 - The client keeps the server's state and its own unacknowledged changes apart, and shows the two merged. That's how offline edits appear immediately and how a rejected change disappears cleanly.
 
@@ -96,10 +106,10 @@ Sync works like this:
 - `src/common/ws.asm` and `src/common/wire.asm` have WebSocket framing and the message reader and writers.
 - `src/server/db.asm` has the tables, the journal and snapshots.
 - `src/server/conn.asm` has the event loop's connections: HTTP upgrade, handshake, framing and buffered writes.
-- `src/server/handlers.asm` has accounts and sessions, and `password.asm` changing a password. `teams.asm` has teams and members. `issues.asm` has snapshots, events and every change to issues, labels and projects. `messages.asm` has the team channel, direct messages and seen marks.
+- `src/server/handlers.asm` has accounts and sessions, and `password.asm` changing a password. `teams.asm` has teams, members and roles. `issues.asm` has snapshots, events and every change to issues, labels and projects. `messages.asm` has messages, editing them and seen marks, `channels.asm` the channels besides `#general`, and `images.asm` uploading, storing and serving images.
 - `src/client/net.asm` has the connection state machine, keepalive and reconnect.
 - `src/client/sync.asm` has the client's copy of the team, the pending changes, and the merged view.
 - `src/client/wayland.asm` has the window. `draw.asm`, `text.asm`, `shapes.asm`, `font.asm` and `icons.asm` have the rasterizer, the anti-aliased stroke font, the anti-aliased shapes and the icons.
-- `src/client/ui.asm` has the client's state and list logic, `input.asm` the mouse and keyboard, `keymap.asm` the keyboard layout, `edit.asm` text field editing and selection, `clipboard.asm` copy and paste, `widgets.asm` fields, buttons and chips, `menu.asm` the command menu and the pickers, `views.asm` the screens, `sidebar.asm` the sidebar, `chat.asm` opening and drawing a conversation, `comments.asm` an issue's comments and editing them, `labels.asm` the dialog for renaming and deleting labels and projects, `account.asm` the change password dialog, and `dialogs.asm` opening and submitting the new issue and new team dialogs.
+- `src/client/ui.asm` has the client's state and list logic, `input.asm` the mouse and keyboard, `keymap.asm` the keyboard layout, `edit.asm` text field editing and selection, `clipboard.asm` copy and paste, `widgets.asm` fields, buttons and chips, `menu.asm` the command menu and the pickers, `views.asm` the screens, `sidebar.asm` the sidebar, `chat.asm` opening and drawing a conversation, `comments.asm` an issue's comments and editing them, `labels.asm` the dialog for renaming and deleting labels and projects, `account.asm` the change password dialog, `dialogs.asm` opening and submitting the new issue and new team dialogs, `members.asm` the team settings dialog, `channel.asm` the channel list and its dialog, `chatedit.asm` editing and deleting messages, `undo.asm` undo and redo in text fields, `attach.asm` pasting and uploading an image, and `thumbs.asm` downloading, caching and drawing images. `inflate.asm` and `png.asm` decode PNGs, scaled down as they're decoded.
 - `src/client/session.asm` remembers the server and login between runs, and `localtime.asm` reads the time zone.
-- `tests/crypto_test.asm` checks the crypto against published test vectors. `tests/ui_test.asm` draws the client into memory and checks how it answers clicks, keys and the wheel. `tests/font_preview.asm` renders the font and icons for a look.
+- `tests/crypto_test.asm` checks the crypto against published test vectors. `tests/ui_test.asm` draws the client into memory and checks how it answers clicks, keys and the wheel. `tests/png_test.asm` decodes the PNGs `tests/images/make_images.py` wrote, one for every color type, filter and kind of deflate block, and compares the pixels. `tests/font_preview.asm` renders the font and icons for a look.

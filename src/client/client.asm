@@ -56,10 +56,18 @@ global _start
 %include "account.asm"
 %include "dialogs.asm"
 %include "keymap.asm"
+%include "members.asm"
+%include "channel.asm"
+%include "chatedit.asm"
+%include "undo.asm"
 %include "edit.asm"
 %include "clipboard.asm"
 %include "session.asm"
 %include "localtime.asm"
+%include "inflate.asm"
+%include "png.asm"
+%include "thumbs.asm"
+%include "attach.asm"
 
 section .text
 

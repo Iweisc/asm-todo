@@ -22,6 +22,7 @@ op_project:     resd 1
 op_labels:      resd 1
 op_text_len:    resd 1
 op_body_len:    resd 1
+op_image:       resd 1                      ; a comment's or message's, 0 for none
 op_text:        resq 1                      ; a title or name
 op_body:        resq 1                      ; a description, comment or message
 
@@ -213,6 +214,9 @@ h_subscribe:
     mov edi, [cur_idx]
     mov esi, r12d
     call send_snapshot
+    mov edi, [cur_idx]
+    mov esi, r12d
+    call send_channels
     mov rax, [cur]
     mov edi, [cur_idx]
     mov esi, r12d
@@ -255,6 +259,9 @@ wr_comment:
     call wr_str16
     movzx esi, byte [rbx + CMT_EDITED]
     call wr_u8
+    mov esi, IMAGE_ON_COMMENT
+    mov edx, [rbx + CMT_ID]
+    call wr_image_ref
     pop rbx
     ret
 
@@ -442,9 +449,9 @@ read_op:
     cmp edi, OP_DELETE_COMMENT
     je .id
     cmp edi, OP_COMMENT
-    je .body
+    je .attached
     cmp edi, OP_MESSAGE
-    je .body                                ; the same shape: u32, str16
+    je .attached                            ; the same shape: u32, str16, u32
     cmp edi, OP_EDIT_COMMENT
     je .body
     cmp edi, OP_SET_LABEL
@@ -477,6 +484,15 @@ read_op:
     mov [op_text], rax
     mov [op_text_len], edx
     jmp .read_body
+.attached:
+    call rd_u32
+    mov [op_issue], eax
+    call rd_str16
+    mov [op_body], rax
+    mov [op_body_len], edx
+    call rd_u32
+    mov [op_image], eax
+    jmp .known
 .body:
     call rd_u32
     mov [op_issue], eax
@@ -941,19 +957,19 @@ op_delete_issue:
 op_comment:
     push rbx
     push r12
-    sub rsp, 8
+    push r13
     call op_find_issue
     test rax, rax
     jz .gone
     mov r12, rax
-    cmp dword [op_body_len], 0
-    je .invalid
-    mov rsi, [op_body]
-    mov edx, [op_body_len]
-    mov ecx, COMMENT_MAX
-    call valid_body
+    mov rax, [op_team]
+    mov edi, [rax + TEAM_ID]
+    xor esi, esi
+    mov edx, COMMENT_MAX
+    call op_attachment
     test eax, eax
     jz .invalid
+    mov r13, rdx                            ; its image
     mov edi, T_COMMENTS
     mov esi, CMT_ISSUE
     mov edx, [r12 + ISS_ID]
@@ -982,6 +998,10 @@ op_comment:
     mov edi, T_COMMENTS
     mov rsi, rbx
     call db_touch
+    mov rdi, r13
+    mov esi, IMAGE_ON_COMMENT
+    mov edx, [rbx + CMT_ID]
+    call attach_image
     mov esi, EV_COMMENT
     call commit_event
     mov esi, [r12 + ISS_ID]
@@ -1000,7 +1020,7 @@ op_comment:
 .full:
     mov eax, ACK_FULL
 .done:
-    add rsp, 8
+    pop r13
     pop r12
     pop rbx
     ret

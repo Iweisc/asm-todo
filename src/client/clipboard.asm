@@ -24,10 +24,17 @@ section .rodata
 s_type_utf8:        db "text/plain;charset=utf-8", 0
 s_type_utf8_string: db "UTF8_STRING", 0
 s_type_plain:       db "text/plain", 0
+s_type_png:         db "image/png", 0
+s_type_uri_list:    db "text/uri-list", 0
 align 8
-; The text types we take and give, the best first. new_types and clip_types
-; have a bit for each one an offer has.
+; The text types we give, the best first.
 text_types:         dq s_type_utf8, s_type_utf8_string, s_type_plain, 0
+; And what we take: those, then an image or a copied file for attach.asm.
+; new_types and clip_types have a bit for each one an offer has.
+paste_types:        dq s_type_utf8, s_type_utf8_string, s_type_plain, s_type_png, s_type_uri_list, 0
+%define PASTE_TEXT      7               ; the text types' bits
+%define PASTE_PNG       3
+%define PASTE_URI       4
 
 section .bss
 alignb 4
@@ -126,7 +133,7 @@ on_data_offer:
     lea r12, [rdx + 4]
     xor ebx, ebx
 .type:
-    mov rsi, [text_types + rbx * 8]
+    mov rsi, [paste_types + rbx * 8]
     test rsi, rsi
     jz .out
     mov rdi, r12
@@ -243,6 +250,9 @@ clip_paste:
     push r12
     push r13
     mov r12d, edi
+    call attach_paste
+    test eax, eax
+    jnz .done
     cmp dword [id_data_source], 0
     je .other
     mov edi, r12d
@@ -252,12 +262,14 @@ clip_paste:
     jmp .done
 .other:
     mov eax, [clip_types]
-    test eax, eax
+    and eax, PASTE_TEXT
     jz .done
     cmp dword [clip_offer], 0
     je .done
     bsf eax, eax                            ; the best type it has
     mov rbx, [text_types + rax * 8]
+    lea rdi, [paste_buf]
+    mov esi, PASTE_MAX
     call read_offer
     test eax, eax
     jz .done
@@ -275,12 +287,16 @@ clip_paste:
     pop rbx
     ret
 
-; Has clip_offer write itself into a pipe and reads it into paste_buf.
-; rbx = the type to ask for -> eax = bytes read
+; Has clip_offer write itself into a pipe and reads it.
+; rbx = the type to ask for, rdi = where to, esi = room there -> eax = bytes read
 read_offer:
     push rbx
     push r12
+    push r13
+    push r14
     sub rsp, 24
+    mov r13, rdi
+    mov r14d, esi
     mov eax, SYS_pipe2
     mov rdi, rsp
     mov esi, O_CLOEXEC
@@ -316,9 +332,8 @@ read_offer:
     jle .close                              ; it never answered
     mov eax, SYS_read
     mov edi, [rsp]
-    lea rsi, [paste_buf]
-    add rsi, r12
-    mov edx, PASTE_MAX
+    lea rsi, [r13 + r12]
+    mov edx, r14d
     sub edx, r12d
     jz .close
     syscall
@@ -338,6 +353,8 @@ read_offer:
     xor eax, eax
 .done:
     add rsp, 24
+    pop r14
+    pop r13
     pop r12
     pop rbx
     ret

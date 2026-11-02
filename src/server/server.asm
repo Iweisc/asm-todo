@@ -44,9 +44,11 @@ global _start
 %include "conn.asm"
 %include "handlers.asm"
 %include "password.asm"
+%include "channels.asm"
 %include "teams.asm"
 %include "issues.asm"
 %include "messages.asm"
+%include "images.asm"
 
 _start:
     call ignore_sigpipe

@@ -7,7 +7,9 @@
 ; At startup the journal is replayed, then folded into a fresh snapshot.
 ;
 ; Snapshot: the 96-byte header (which includes the server's private key),
-; then each table's slots up to its high-water mark. Created 0600.
+; then each table's slots up to its high-water mark. The header ran out of
+; room for counts, so tables after the first HEADER_TABLES write theirs as a
+; u32 just before their slots. Created 0600.
 ;
 ; Journal: "ATJ1", u32 generation, then batches of
 ;   u32 length, records, u32 FNV-1a of the records
@@ -94,6 +96,7 @@
 %define MS_CREATED      16
 %define MS_LEN          20              ; u16
 %define MS_TEXT         22              ; MESSAGE_MAX bytes
+%define MS_EDITED       522             ; u8, 1 once its author changed it
 %define MS_SIZE         528
 
 ; The newest message a member has seen in one of their conversations.
@@ -118,8 +121,37 @@ fits CMT_TEXT, COMMENT_MAX, CMT_EDITED
 fits CMT_EDITED, 1, CMT_SIZE
 fits SESS_HASH, 32, SESS_USER
 fits MS_LEN, 2, MS_TEXT
-fits MS_TEXT, MESSAGE_MAX, MS_SIZE
+fits MS_TEXT, MESSAGE_MAX, MS_EDITED
+fits MS_EDITED, 1, MS_SIZE
 fits SEEN_LAST, 4, SEEN_SIZE
+
+; A team's channel besides #general. Messages in it go to CHANNEL_PEER + slot.
+%define CHN_TEAM        0               ; 0 marks a free slot
+%define CHN_CREATOR     4
+%define CHN_SLOT        8               ; 1 to CHANNEL_SLOTS
+%define CHN_NAME_LEN    9
+%define CHN_NAME        10              ; CHANNEL_NAME_MAX bytes
+%define CHN_SIZE        40
+fits CHN_NAME, CHANNEL_NAME_MAX, CHN_SIZE
+
+; An image attached to a message or comment, or on its way to being. The
+; PNG itself is a file, see images.asm.
+%define IMG_ID          0               ; random, 0 marks a free slot
+%define IMG_TEAM        4
+%define IMG_OWNER       8               ; who uploaded it
+%define IMG_TO          12              ; the conversation's peer, 0 for #general or a comment
+%define IMG_PARENT      16              ; the message or comment it's on, once attached
+%define IMG_BYTES       20
+%define IMG_GOT         24              ; bytes in the file so far
+%define IMG_WIDTH       28              ; u16
+%define IMG_HEIGHT      30              ; u16
+%define IMG_KIND        32              ; u8, IMAGE_ON_*, 0 until attached
+%define IMG_SIZE        36
+%define IMAGE_ON_MESSAGE 1              ; IMG_KIND
+%define IMAGE_ON_COMMENT 2
+fits IMG_WIDTH, 2, IMG_HEIGHT
+fits IMG_HEIGHT, 2, IMG_KIND
+fits IMG_KIND, 1, IMG_SIZE
 
 %define MAX_USERS       1024
 %define MAX_TEAMS       512
@@ -129,6 +161,8 @@ fits SEEN_LAST, 4, SEEN_SIZE
 %define MAX_SESSIONS    4096
 %define MAX_MESSAGES    32768           ; when full, the oldest message makes room
 %define MAX_SEEN        32768
+%define MAX_CHANNELS    (MAX_TEAMS * CHANNEL_SLOTS)
+%define MAX_IMAGES      4096
 
 %define T_USERS         0
 %define T_TEAMS         1
@@ -138,13 +172,19 @@ fits SEEN_LAST, 4, SEEN_SIZE
 %define T_SESSIONS      5
 %define T_MESSAGES      6
 %define T_SEEN          7
+%define T_CHANNELS      8
+%define T_IMAGES        9
+%define HEADER_TABLES   8               ; the tables whose counts are in the header
 %define T_HEADER        0xff
 
 %define DB_MAGIC        0x33445441      ; "ATD3"
 ; Version 2 gave comments CMT_EDITED in bytes that were always zero before,
-; so a version 1 file loads as it is and gets saved as version 2.
-%define DB_VERSION      2
-%define DB_VERSION_OLD  1
+; and version 3 added the channels table after the others, and MS_EDITED,
+; also in bytes that were always zero. Version 4 added the images table
+; after that. Older files load as they are, without the tables they're
+; older than, and get saved as version 4.
+%define DB_VERSION      4
+%define DB_VERSION_MIN  1
 %define DB_HEADER       96
 %define HEADER_LOGGED   64              ; the part without the private key
 %define JOURNAL_MAGIC   0x314a5441      ; "ATJ1"
@@ -173,6 +213,8 @@ db_tables:
     dq sessions, n_sessions, SESS_SIZE,  MAX_SESSIONS
     dq messages, n_messages, MS_SIZE,    MAX_MESSAGES
     dq seen,     n_seen,     SEEN_SIZE,  MAX_SEEN
+    dq channels, n_channels, CHN_SIZE,   MAX_CHANNELS
+    dq images,   n_images,   IMG_SIZE,   MAX_IMAGES
 TABLE_COUNT equ ($ - db_tables) / 32
 
 section .bss
@@ -211,6 +253,8 @@ n_seen:             resd 1
 server_keys:                                ; private || public, the shape noise_server_respond wants
 server_priv:        resb 32                 ; last 32 bytes of the header
 server_pub:         resb 32                 ; derived at startup, never written
+n_channels:         resd 1                  ; kept in the snapshot after the header's tables
+n_images:           resd 1
 
 users:              resb MAX_USERS * USER_SIZE
 teams:              resb MAX_TEAMS * TEAM_SIZE
@@ -220,6 +264,8 @@ comments:           resb MAX_COMMENTS * CMT_SIZE
 sessions:           resb MAX_SESSIONS * SESS_SIZE
 messages:           resb MAX_MESSAGES * MS_SIZE
 seen:               resb MAX_SEEN * SEEN_SIZE
+channels:           resb MAX_CHANNELS * CHN_SIZE
+images:             resb MAX_IMAGES * IMG_SIZE
 jbuf:               resb JBUF_SIZE
 
 section .text
@@ -322,6 +368,7 @@ db_load:
     lea rdx, [log_suffix]
     call path_with_suffix
     call find_dir
+    call image_init
 
     mov eax, SYS_open
     mov rdi, [db_path]
@@ -341,17 +388,29 @@ db_load:
     jnz .bad
     cmp dword [db_magic], DB_MAGIC
     jne .bad
-    cmp dword [db_version], DB_VERSION
-    je .version
-    cmp dword [db_version], DB_VERSION_OLD
-    jne .bad
-.version:
+    mov eax, [db_version]
+    cmp eax, DB_VERSION
+    ja .bad
+    cmp eax, DB_VERSION_MIN
+    jb .bad
+    lea r12, [db_tables]
+    xor r13d, r13d
+.table:
+    cmp r13d, HEADER_TABLES
+    jb .rows
+    lea eax, [r13d - HEADER_TABLES + 3]     ; each table after them came a version after the last
+    cmp [db_version], eax
+    jb .loaded
+    mov edi, ebx
+    mov rsi, [r12 + 8]
+    mov edx, 4
+    call read_exact
+    test eax, eax
+    jnz .bad
+.rows:
     call counts_ok
     test eax, eax
     jz .bad
-    lea r12, [db_tables]
-    mov r13d, TABLE_COUNT
-.table:
     mov rcx, [r12 + 8]
     mov ecx, [rcx]
     imul rcx, [r12 + 16]
@@ -362,13 +421,16 @@ db_load:
     test eax, eax
     jnz .bad
     add r12, 32
-    dec r13d
-    jnz .table
+    inc r13d
+    cmp r13d, TABLE_COUNT
+    jb .table
+.loaded:
     mov eax, SYS_close
     mov edi, ebx
     syscall
     call open_journal
     call replay_journal
+    call drop_partial_images
     cmp dword [next_message_id], 0
     jne .compact
     mov dword [next_message_id], 1          ; a database from before messages
@@ -515,6 +577,15 @@ replay_journal:
     mov eax, [r14 + 1]                      ; slot
     cmp rax, [rcx + 24]
     jae .corrupt
+    ; The header record restores the other counts, but not these.
+    cmp byte [r14], HEADER_TABLES
+    jb .copy
+    mov rdx, [rcx + 8]
+    lea edi, [eax + 1]
+    cmp [rdx], edi
+    jae .copy
+    mov [rdx], edi
+.copy:
     imul rax, [rcx + 16]
     mov rdi, [rcx]
     add rdi, rax
@@ -608,8 +679,17 @@ db_save:
     test rax, rax
     jnz db_fail
     lea r12, [db_tables]
-    mov r13d, TABLE_COUNT
+    xor r13d, r13d
 .table:
+    cmp r13d, HEADER_TABLES
+    jb .rows
+    mov rsi, [r12 + 8]                      ; its count, which the header has no room for
+    mov edi, ebx
+    mov edx, 4
+    call write_all
+    test rax, rax
+    jnz db_fail
+.rows:
     mov rdx, [r12 + 8]
     mov edx, [rdx]
     imul rdx, [r12 + 16]
@@ -619,8 +699,9 @@ db_save:
     test rax, rax
     jnz db_fail
     add r12, 32
-    dec r13d
-    jnz .table
+    inc r13d
+    cmp r13d, TABLE_COUNT
+    jb .table
     mov eax, SYS_fsync
     mov edi, ebx
     syscall
@@ -943,6 +1024,8 @@ free_row:
     sub rsp, 8
     mov ebx, edi
     mov r12, rsi
+    call drop_attached_image
+    mov edi, ebx
     shl edi, 5
     mov rsi, [db_tables + rdi + 16]
     mov rdi, r12
