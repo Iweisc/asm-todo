@@ -302,6 +302,7 @@ clear_team_view:
     mov [chat_open], al
     mov [chat_count], eax
     mov [unread_count], eax
+    mov [mention_marks], eax
     mov [chan_count], eax
     lea rdi, [labels]
     mov ecx, LABEL_SLOTS * LB_SIZE + PROJECT_SLOTS * PJ_SIZE  ; projects follows labels
@@ -1679,6 +1680,7 @@ mark_unread:
 
 ; edi = peer
 clear_unread:
+    call clear_mentioned
     call find_unread
     cmp eax, -1
     je .done
@@ -1725,7 +1727,8 @@ read_message:
     pop rbx
     ret
 
-; MSG_CHAT: a new message. Shown if its conversation is open, otherwise it marks that one unread.
+; MSG_CHAT: a new message. Shown if its conversation is open, otherwise it marks that
+; one unread, and a channel mentioned too if it mentions us.
 on_chat:
     push rbx
     push r12
@@ -1766,6 +1769,9 @@ on_chat:
     je .done
     mov edi, r12d
     call mark_unread
+    mov rdi, rsp
+    mov esi, r12d
+    call note_mention
 .done:
     add rsp, CH_SIZE + 8
     pop r13
@@ -1841,7 +1847,8 @@ on_chat_history:
     pop rbx
     ret
 
-; MSG_UNREAD: the conversations with messages we haven't seen, replacing the old list.
+; MSG_UNREAD: the conversations with messages we haven't seen, and the channels
+; among them that mention us, replacing the old lists.
 on_unread:
     push rbx
     push r12
@@ -1857,12 +1864,15 @@ on_unread:
     mov dword [unread_count], 0
 .peer:
     test r12d, r12d
-    jz .done
+    jz .mentions
     call rd_u32
     mov edi, eax
     call mark_unread
     dec r12d
     jmp .peer
+.mentions:
+    call read_mentions
+    jmp .done
 .bad:
     mov byte [rd_bad], 1
     jmp .done

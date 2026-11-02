@@ -40,6 +40,9 @@ priority_names: NAME s_no_priority
 section .data
 wrap_caret:     dd -1                   ; offset to draw the caret at in draw_wrapped, or -1
 wrap_lh:        dd LINE_H               ; draw_wrapped's line height, for the next call only
+wrap_caret_x:   dd 0                    ; where draw_wrapped last drew the caret, for the
+wrap_caret_y:   dd -1                   ; mention list, which sets y back to -1
+wrap_mentions:  db 0                    ; draw_wrapped highlights mentions, for the next call only
 
 section .text
 
@@ -299,7 +302,8 @@ wrap_line:
     ret
 
 ; Draws text wrapped to a width, wrap_lh apart, with the caret at wrap_caret
-; unless that's -1, and wrap_sel_from to wrap_sel_to highlighted. Resets them all.
+; unless that's -1, wrap_sel_from to wrap_sel_to highlighted, and mentions too
+; if wrap_mentions is set. Resets them all.
 ; rdi = text, esi = length, edx = x, ecx = top, r8d = width, r9d = ink
 ; -> eax = height used
 draw_wrapped:
@@ -342,7 +346,13 @@ draw_wrapped:
     lea rdx, [rbx + rbp]
     mov ecx, r14d
     mov r8d, [rsp + 8]
+    cmp byte [wrap_mentions], 0
+    je .plain
+    call draw_mention_line
+    jmp .drawn
+.plain:
     call draw_text
+.drawn:
     mov eax, [wrap_caret]
     sub eax, ebp
     js .no_caret
@@ -356,10 +366,7 @@ draw_wrapped:
     add eax, [rsp]
     mov edi, eax
     lea esi, [r13d + 2]
-    mov edx, 1
-    mov ecx, 16
-    mov r8d, C_ACCENT_HI
-    call fill_rect
+    call draw_wrapped_caret
     mov dword [wrap_caret], -1
 .no_caret:
     inc r15d
@@ -376,16 +383,14 @@ draw_wrapped:
     je .empty_line
     mov edi, [rsp]
     lea esi, [r13d + 2]
-    mov edx, 1
-    mov ecx, 16
-    mov r8d, C_ACCENT_HI
-    call fill_rect
+    call draw_wrapped_caret
 .empty_line:
     inc r15d
 .done:
     mov dword [wrap_caret], -1
     mov dword [wrap_sel_from], -1
     mov dword [wrap_sel_to], -1
+    mov byte [wrap_mentions], 0
     mov eax, r15d
     imul eax, [wrap_lh]
     mov dword [wrap_lh], LINE_H
@@ -397,6 +402,15 @@ draw_wrapped:
     pop rbp
     pop rbx
     ret
+
+; The caret in wrapped text, remembered for the mention list. edi = x, esi = top
+draw_wrapped_caret:
+    mov [wrap_caret_x], edi
+    mov [wrap_caret_y], esi
+    mov edx, 1
+    mov ecx, 16
+    mov r8d, C_ACCENT_HI
+    jmp fill_rect
 
 ; edi = field -> eax = 1 if it has keyboard focus
 field_focused:

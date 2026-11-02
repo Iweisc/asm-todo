@@ -90,7 +90,8 @@
 %define MSG_ISSUE_DETAIL    139                 ; u32 issue, str16 description, u8 n, n * comment
 %define MSG_CHAT            140                 ; u32 team, message
 %define MSG_CHAT_HISTORY    141                 ; u32 team, u32 peer, u8 n, n * message, oldest first
-%define MSG_UNREAD          142                 ; u32 team, u8 n, n * u32 peer with messages not seen yet
+%define MSG_UNREAD          142                 ; u32 team, u8 n, n * u32 peer with messages not seen yet,
+                                                ; u8 m, m * u32 channel among them where one mentions you
 %define MSG_PASSWORD_CHANGED 143                ; the user's other sessions are logged out
 %define MSG_CHANNELS        144                 ; u32 team, u8 n, n * (u8 slot, u32 maker, str name)
 %define MSG_CHAT_EDITED     145                 ; u32 team, message

@@ -36,6 +36,7 @@ global _start
 %include "noise.asm"
 %include "ws.asm"
 %include "wire.asm"
+%include "mention.asm"
 %include "font.asm"
 %include "draw.asm"
 %include "text.asm"
@@ -71,6 +72,7 @@ global _start
 %include "thumbs.asm"
 %include "attach.asm"
 %include "pick.asm"
+%include "mentions.asm"
 
 section .text
 

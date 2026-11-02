@@ -40,6 +40,7 @@ global _start
 %include "noise.asm"
 %include "ws.asm"
 %include "wire.asm"
+%include "mention.asm"
 %include "db.asm"
 %include "conn.asm"
 %include "handlers.asm"

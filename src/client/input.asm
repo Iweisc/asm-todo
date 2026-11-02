@@ -310,7 +310,7 @@ ui_click:
     call disarm_others
     mov eax, [hover_action]
     mov edi, [hover_arg]
-    cmp eax, A_SEND
+    cmp eax, A_MENTION
     ja .done
     jmp [.table + rax * 8]
 .table:
@@ -322,7 +322,7 @@ ui_click:
     dq open_team_settings, submit_invite, click_set_role, save_team_name
     dq open_channel_dialog, submit_channel, click_delete_channel
     dq .nothing, start_message_edit, click_delete_message, open_image_view, attach_drop
-    dq pick_image, click_send
+    dq pick_image, click_send, pick_mention
 .nothing:
     ; Clicking empty space leaves whatever field was being edited.
     cmp dword [focus], F_PASS
@@ -970,6 +970,10 @@ ui_key:
     cmp dword [focus], F_NONE
     je .shortcut
     mov edi, ebx
+    call mention_key
+    test eax, eax
+    jnz .no_repeat
+    mov edi, ebx
     call field_command
     test eax, eax
     jnz .no_repeat
@@ -979,6 +983,7 @@ ui_key:
     mov r12d, eax
     cmp byte [field_changed], 0
     je .typed
+    mov dword [mention_sel], 0              ; typing starts the mention list at the top
     cmp dword [focus], F_MENU
     jne .key_typed
     mov dword [menu_sel], 0                 ; a new filter starts at the top

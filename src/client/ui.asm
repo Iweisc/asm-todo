@@ -192,6 +192,7 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define A_DROP_ATTACHMENT 45            ; arg = the field whose attachment goes
 %define A_ATTACH_PICK   46              ; arg = the field to attach a file to
 %define A_SEND          47              ; arg = the field to send
+%define A_MENTION       48              ; arg = a row of the mention list
 %define BOX_BUTTONS_W   76              ; what a box's text leaves clear for them
 
 ; Views of a team's issues

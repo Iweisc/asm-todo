@@ -28,6 +28,7 @@ global _start
 %include "noise.asm"
 %include "ws.asm"
 %include "wire.asm"
+%include "mention.asm"
 %include "font.asm"
 %include "draw.asm"
 %include "text.asm"
@@ -63,6 +64,7 @@ global _start
 %include "thumbs.asm"
 %include "attach.asm"
 %include "pick.asm"
+%include "mentions.asm"
 
 section .rodata
 t_server:       db "127.0.0.1:18080", 0
@@ -201,6 +203,7 @@ _start:
     call auth_tests
     call tz_tests
     call keymap_tests
+    call mention_tests
     call controls_tests
     xor edi, edi
     cmp dword [failures], 0
@@ -1363,3 +1366,4 @@ tz_tests:
     ret
 %include "tests/ui_messages.asm"
 %include "tests/ui_controls.asm"
+%include "tests/ui_mentions.asm"
