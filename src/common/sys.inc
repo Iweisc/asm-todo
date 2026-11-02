@@ -21,7 +21,11 @@
 %define SYS_bind            49
 %define SYS_listen          50
 %define SYS_setsockopt      54
+%define SYS_dup2            33
+%define SYS_fork            57
+%define SYS_execve          59
 %define SYS_exit            60
+%define SYS_wait4           61
 %define SYS_fsync           74
 %define SYS_fdatasync       75
 %define SYS_ftruncate       77

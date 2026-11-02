@@ -41,6 +41,7 @@ global _start
 %include "text.asm"
 %include "shapes.asm"
 %include "icons.asm"
+%include "glyphs.asm"
 %include "wayland.asm"
 %include "net.asm"
 %include "sync.asm"
@@ -49,6 +50,7 @@ global _start
 %include "widgets.asm"
 %include "menu.asm"
 %include "views.asm"
+%include "chips.asm"
 %include "sidebar.asm"
 %include "chat.asm"
 %include "comments.asm"
@@ -68,6 +70,7 @@ global _start
 %include "png.asm"
 %include "thumbs.asm"
 %include "attach.asm"
+%include "pick.asm"
 
 section .text
 
@@ -78,6 +81,7 @@ _start:
     cmp rax, 3
     ja .usage
     lea rdi, [rbx + rax * 8 + 16]           ; envp
+    mov [client_env], rdi
     call session_init
     mov rax, [rbx]
     lea rdi, [rbx + rax * 8 + 16]
@@ -149,9 +153,9 @@ _start:
     mov edi, 2
     call exit
 
-; Waits on the compositor and the server at once.
+; Waits on the compositor, the server and an open file dialog at once.
 main_loop:
-    sub rsp, 24                             ; two struct pollfd { fd, events, revents }
+    sub rsp, 24                             ; three struct pollfd { fd, events, revents }
 .loop:
     cmp byte [net_state], NET_OFF
     jne .draw
@@ -183,9 +187,12 @@ main_loop:
     mov [rsp + 8], eax
     call net_poll_events
     mov [rsp + 12], eax
+    mov eax, [pick_fd]
+    mov [rsp + 16], eax
+    mov dword [rsp + 20], POLLIN
     mov eax, SYS_poll
     mov rdi, rsp
-    mov esi, 2
+    mov esi, 3
     mov edx, ebx
     syscall
     test rax, rax
@@ -196,8 +203,12 @@ main_loop:
 .net:
     movzx edi, word [rsp + 14]
     test edi, edi
-    jz .tick
+    jz .pick
     call net_io
+.pick:
+    test word [rsp + 22], 0xffff
+    jz .tick
+    call pick_readable
 .tick:
     call repeat_tick
     call net_tick

@@ -6,6 +6,14 @@ section .rodata
 text s_create_label,    "Create label: "
 text s_create_project,  "Create project: "
 text s_no_results,      "No results"
+text s_group_label,     "Label"
+text s_group_project,   "Project"
+text s_group_priority,  "Priority"
+text s_group_assignee,  "Assignee"
+group_names:    NAME s_group_label      ; by FG_* - 1
+                NAME s_group_project
+                NAME s_group_priority
+                NAME s_group_assignee
 
 text c_new_issue,       "Create new issue"
 text c_board,           "Switch to board view"
@@ -55,36 +63,36 @@ menu_hints:     NAME h_status
 %define WHEN_LIST       2               ; in the list layout
 %define WHEN_BOARD      3
 %define WHEN_FILTERED   4
-%macro COMMAND 4
+%macro COMMAND 5                        ; text, value, hint key, when, GL_* icon
     dq %1
     dd %1_len, %2
-    db %3, %4, 0, 0, 0, 0, 0, 0
+    db %3, %4, %5, 0, 0, 0, 0, 0
 %endmacro
 commands:
-    COMMAND c_new_issue, CMD_NEW_ISSUE, 'C', WHEN_ALWAYS
-    COMMAND c_status, CMD_PICK + MK_STATUS, 'S', WHEN_ISSUE
-    COMMAND c_priority, CMD_PICK + MK_PRIORITY, 'P', WHEN_ISSUE
-    COMMAND c_assign, CMD_PICK + MK_ASSIGNEE, 'A', WHEN_ISSUE
-    COMMAND c_labels, CMD_PICK + MK_LABELS, 'L', WHEN_ISSUE
-    COMMAND c_project, CMD_PICK + MK_PROJECT, 'M', WHEN_ISSUE
-    COMMAND c_copy_id, CMD_COPY_ID, 0, WHEN_ISSUE
-    COMMAND c_delete, CMD_DELETE, 0, WHEN_ISSUE
-    COMMAND c_board, CMD_LAYOUT, 0, WHEN_LIST
-    COMMAND c_list, CMD_LAYOUT, 0, WHEN_BOARD
-    COMMAND c_all, CMD_VIEW + V_ALL, 0, WHEN_ALWAYS
-    COMMAND c_active, CMD_VIEW + V_ACTIVE, 0, WHEN_ALWAYS
-    COMMAND c_backlog, CMD_VIEW + V_BACKLOG, 0, WHEN_ALWAYS
-    COMMAND c_mine, CMD_VIEW + V_MINE, 0, WHEN_ALWAYS
-    COMMAND c_chat, CMD_CHAT, 0, WHEN_ALWAYS
-    COMMAND c_filter, CMD_FILTER, 0, WHEN_ALWAYS
-    COMMAND c_clear, CMD_CLEAR, 0, WHEN_FILTERED
-    COMMAND c_labels_manage, CMD_LABELS, 0, WHEN_ALWAYS
-    COMMAND c_new_channel, CMD_NEW_CHANNEL, 0, WHEN_ALWAYS
-    COMMAND c_invite, CMD_INVITE, 0, WHEN_ALWAYS
-    COMMAND c_settings, CMD_SETTINGS, 0, WHEN_ALWAYS
-    COMMAND c_new_team, CMD_NEW_TEAM, 0, WHEN_ALWAYS
-    COMMAND c_password, CMD_PASSWORD, 0, WHEN_ALWAYS
-    COMMAND c_log_out, CMD_LOGOUT, 0, WHEN_ALWAYS
+    COMMAND c_new_issue, CMD_NEW_ISSUE, 'C', WHEN_ALWAYS, GL_PLUS
+    COMMAND c_status, CMD_PICK + MK_STATUS, 'S', WHEN_ISSUE, GL_ACTIVE
+    COMMAND c_priority, CMD_PICK + MK_PRIORITY, 'P', WHEN_ISSUE, GL_BARS
+    COMMAND c_assign, CMD_PICK + MK_ASSIGNEE, 'A', WHEN_ISSUE, GL_PERSON
+    COMMAND c_labels, CMD_PICK + MK_LABELS, 'L', WHEN_ISSUE, GL_TAG
+    COMMAND c_project, CMD_PICK + MK_PROJECT, 'M', WHEN_ISSUE, GL_CUBE
+    COMMAND c_copy_id, CMD_COPY_ID, 0, WHEN_ISSUE, GL_COPY
+    COMMAND c_delete, CMD_DELETE, 0, WHEN_ISSUE, GL_TRASH
+    COMMAND c_board, CMD_LAYOUT, 0, WHEN_LIST, GL_GRID
+    COMMAND c_list, CMD_LAYOUT, 0, WHEN_BOARD, GL_LIST
+    COMMAND c_all, CMD_VIEW + V_ALL, 0, WHEN_ALWAYS, GL_ISSUES
+    COMMAND c_active, CMD_VIEW + V_ACTIVE, 0, WHEN_ALWAYS, GL_ACTIVE
+    COMMAND c_backlog, CMD_VIEW + V_BACKLOG, 0, WHEN_ALWAYS, GL_BACKLOG
+    COMMAND c_mine, CMD_VIEW + V_MINE, 0, WHEN_ALWAYS, GL_PERSON
+    COMMAND c_chat, CMD_CHAT, 0, WHEN_ALWAYS, GL_HASH
+    COMMAND c_filter, CMD_FILTER, 0, WHEN_ALWAYS, GL_FUNNEL
+    COMMAND c_clear, CMD_CLEAR, 0, WHEN_FILTERED, GL_CROSS
+    COMMAND c_labels_manage, CMD_LABELS, 0, WHEN_ALWAYS, GL_TAG
+    COMMAND c_new_channel, CMD_NEW_CHANNEL, 0, WHEN_ALWAYS, GL_HASH
+    COMMAND c_invite, CMD_INVITE, 0, WHEN_ALWAYS, GL_PERSON
+    COMMAND c_settings, CMD_SETTINGS, 0, WHEN_ALWAYS, GL_SETTINGS
+    COMMAND c_new_team, CMD_NEW_TEAM, 0, WHEN_ALWAYS, GL_PLUS
+    COMMAND c_password, CMD_PASSWORD, 0, WHEN_ALWAYS, GL_LOCK
+    COMMAND c_log_out, CMD_LOGOUT, 0, WHEN_ALWAYS, GL_LOGOUT
     dq 0
 %define COMMAND_SIZE 24
 
@@ -152,9 +160,33 @@ menu_wheel_by:
     mov byte [need_redraw], 1
     ret
 
+; A right click on an issue's row or card: what can be done to it, in a
+; menu at the pointer.
+ui_right_click:
+    call update_hover
+    mov byte [need_redraw], 1
+    cmp byte [modal], M_NONE
+    jne .done
+    cmp byte [menu_open], 0
+    jne .done
+    cmp dword [hover_action], A_ISSUE
+    jne .done
+    mov esi, [hover_arg]
+    mov [sel_id], esi
+    mov byte [menu_context], 1
+    mov eax, [pointer_x]
+    mov [menu_ax], eax
+    mov eax, [pointer_y]
+    mov [menu_ay], eax
+    mov edi, MK_COMMAND
+    jmp open_menu
+.done:
+    ret
+
 ; Closes the menu, back to the field that had focus before it.
 close_menu:
     mov byte [menu_open], 0
+    mov byte [menu_context], 0
     mov edi, F_NONE
     cmp byte [modal], M_CREATE
     jne .focus
@@ -269,9 +301,14 @@ choose_item:
     mov byte [list_dirty], 1
     jmp .close
 .command:
+    ; A pick a right click's menu leads to opens where it was.
+    movzx r13d, byte [menu_context]
     call close_menu
     mov edi, r12d
     call run_command
+    cmp byte [menu_open], 0
+    je .done
+    mov [menu_context], r13b
     jmp .done
 .close:
     call close_menu
@@ -358,6 +395,8 @@ push_item:
     mov rcx, [rsp]
     mov [rax + MI_CHECK], cl
     mov [rax + MI_HINT], ch
+    mov ecx, [menu_group]
+    mov [rax + MI_GROUP], cl
 .skip:
     add rsp, 16
     pop r15
@@ -445,6 +484,7 @@ build_menu:
     push r15
     sub rsp, 8
     mov dword [menu_count], 0
+    mov dword [menu_group], 0
     call menu_current
     mov r15d, eax
     mov eax, [menu_kind]
@@ -661,6 +701,7 @@ menu_filter_items:
     push r13
     push r15
     mov r15d, edi
+    mov dword [menu_group], FG_LABEL
     lea rbx, [view_labels]
     xor ebp, ebp
 .filter_label:
@@ -681,6 +722,7 @@ menu_filter_items:
     inc ebp
     cmp ebp, LABEL_SLOTS
     jb .filter_label
+    mov dword [menu_group], FG_PROJECT
     lea rbx, [view_projects]
     mov ebp, 1
 .filter_project:
@@ -700,6 +742,7 @@ menu_filter_items:
     inc ebp
     cmp ebp, PROJECT_SLOTS
     jbe .filter_project
+    mov dword [menu_group], FG_PRIORITY
     xor ebp, ebp
 .filter_priority:
     mov edi, ebp
@@ -716,6 +759,7 @@ menu_filter_items:
     inc ebp
     cmp ebp, PRIO_COUNT
     jb .filter_priority
+    mov dword [menu_group], FG_ASSIGNEE
     lea rdi, [s_no_assignee]
     mov esi, s_no_assignee_len
     mov edx, FILTER_ASSIGNEE
@@ -743,6 +787,7 @@ menu_filter_items:
     dec ebp
     jmp .filter_member
 .out:
+    mov dword [menu_group], 0
     pop r15
     pop r13
     pop r12
@@ -767,9 +812,13 @@ menu_command_items:
     je .teams
     movzx eax, byte [rbx + 17]
     cmp eax, WHEN_ISSUE
-    jne .when_list
+    jne .other
     test r12d, r12d
     jz .next_command
+    jmp .add_command
+.other:
+    cmp byte [menu_context], 0              ; a right click's menu has only the issue's
+    jne .next_command
 .when_list:
     cmp eax, WHEN_LIST
     jne .when_board
@@ -790,8 +839,8 @@ menu_command_items:
     mov rdi, [rbx]
     mov esi, [rbx + 8]
     mov edx, [rbx + 12]
-    xor ecx, ecx
-    xor r8d, r8d
+    mov ecx, IC_GLYPH
+    movzx r8d, byte [rbx + 18]
     movzx r9d, byte [rbx + 16]
     shl r9d, 8
     call push_item
@@ -799,6 +848,8 @@ menu_command_items:
     add rbx, COMMAND_SIZE
     jmp .command
 .teams:
+    cmp byte [menu_context], 0
+    jne .context_out
     lea rbx, [teams]
     xor ebp, ebp
 .team:
@@ -819,6 +870,7 @@ menu_command_items:
     jmp .team
 .out:
     call menu_issue_items
+.context_out:
     pop r15
     pop r13
     pop r12
@@ -926,7 +978,14 @@ draw_menu:
     push r14
     sub rsp, 16
     call build_menu
+    mov dword [menu_w], MENU_W
+    cmp byte [menu_context], 0
+    jne .context
     call shade_screen
+    jmp .shaded
+.context:
+    mov dword [menu_w], MENU_CTX_W
+.shaded:
     xor edi, edi
     xor esi, esi
     mov edx, [win_w]
@@ -964,7 +1023,7 @@ draw_menu:
     cmp ebp, eax
     cmovl ebp, eax
     mov r12d, [win_w]                       ; x
-    sub r12d, MENU_W
+    sub r12d, [menu_w]
     sar r12d, 1
     mov r13d, 90                            ; y
     xor r14d, r14d                          ; context line height
@@ -975,16 +1034,35 @@ draw_menu:
     imul ecx, ebp, MENU_ROW_H
     lea ecx, [ecx + r14d + 66]
     mov [rsp], ecx                          ; menu height
+    cmp byte [menu_context], 0
+    je .placed
+    ; At the pointer, kept inside the window.
+    mov r12d, [win_w]
+    sub r12d, [menu_w]
+    sub r12d, 8
+    mov eax, [menu_ax]
+    cmp eax, r12d
+    cmovl r12d, eax
+    mov r13d, [win_h]
+    sub r13d, ecx
+    sub r13d, 8
+    mov eax, [menu_ay]
+    cmp eax, r13d
+    cmovl r13d, eax
+    mov eax, 8
+    cmp r13d, eax
+    cmovl r13d, eax
+.placed:
     mov edi, r12d
     mov esi, r13d
-    mov edx, MENU_W
+    mov edx, [menu_w]
     mov r8d, C_LINE
     mov r9d, C_RAISED
     mov r10d, 10
     call outline_rrect
     mov edi, r12d
     mov esi, r13d
-    mov edx, MENU_W
+    mov edx, [menu_w]
     mov ecx, [rsp]
     mov r8d, A_BLOCK
     xor r9d, r9d
@@ -1011,17 +1089,20 @@ draw_menu:
     lea edi, [r12d + 16]
     lea esi, [r13d + 24]
     mov r8d, INK(C_DIM, ST_SMALL)
-    mov r9d, MENU_W - 32
+    mov r9d, [menu_w]
+    sub r9d, 32
     call draw_text_fit
 .input:
     mov edi, F_MENU
     lea esi, [r12d + 18]
     lea edx, [r13d + r14d + 30]
-    mov ecx, MENU_W - 36
+    mov ecx, [menu_w]
+    sub ecx, 36
     call draw_field
     lea edi, [r12d + 1]
     lea esi, [r13d + r14d + 50]
-    mov edx, MENU_W - 2
+    mov edx, [menu_w]
+    sub edx, 2
     mov ecx, 1
     mov r8d, C_LINE
     call fill_rect
@@ -1065,19 +1146,28 @@ draw_menu_rows:
 .row:
     test r13d, r13d
     jz .done
+    mov r8d, C_SELECT
     cmp ebx, [menu_sel]
-    jne .item
+    je .highlight
+    mov edi, A_MENU_ITEM
+    mov esi, ebx
+    call hovering
+    test eax, eax
+    jz .item
+    mov r8d, C_HOVER
+.highlight:
     lea edi, [r12d + 6]
     mov esi, r15d
-    mov edx, MENU_W - 12
+    mov edx, [menu_w]
+    sub edx, 12
     mov ecx, MENU_ROW_H
-    mov r8d, C_SELECT
     mov r9d, 6
     call fill_rrect
 .item:
     lea edi, [r12d + 6]
     mov esi, r15d
-    mov edx, MENU_W - 12
+    mov edx, [menu_w]
+    sub edx, 12
     mov ecx, MENU_ROW_H
     mov r8d, A_MENU_ITEM
     mov r9d, ebx
@@ -1093,10 +1183,12 @@ draw_menu_rows:
     lea edi, [r12d + 46]
     lea esi, [r15d + 23]
     mov r8d, INK(C_TEXT, ST_BODY)
-    mov r9d, MENU_W - 66
+    mov r9d, [menu_w]
+    sub r9d, 66
     cmp dword [rbp + MI_ICON], IC_ISSUE
     jne .text
-    mov r9d, MENU_W - 160                   ; room for the ID
+    mov r9d, [menu_w]                       ; room for the ID
+    sub r9d, 160
 .text:
     call draw_text_fit
     cmp dword [rbp + MI_ICON], IC_ISSUE
@@ -1104,7 +1196,8 @@ draw_menu_rows:
     mov edi, [rbp + MI_VALUE]
     and edi, ~CMD_ISSUE
     mov esi, r12d
-    add esi, MENU_W - 20
+    add esi, [menu_w]
+    sub esi, 20
     lea edx, [r15d + 23]
     call draw_menu_issue_id
     jmp .check
@@ -1120,10 +1213,31 @@ draw_menu_rows:
     mov r8d, INK(C_DIM, ST_BODY)
     call draw_text
 .check:
+    movzx eax, byte [rbp + MI_GROUP]
+    test eax, eax
+    jz .checkmark
+    ; What it filters by, dim at the right, left of the check if there is one.
+    dec eax
+    shl eax, 4
+    lea rcx, [group_names]
+    mov rdx, [rcx + rax]
+    mov ecx, [rcx + rax + 8]
+    mov edi, r12d
+    add edi, [menu_w]
+    sub edi, 20
+    cmp byte [rbp + MI_CHECK], 0
+    je .group
+    sub edi, 36
+.group:
+    lea esi, [r15d + 23]
+    mov r8d, INK(C_FAINT, ST_SMALL)
+    call draw_link
+.checkmark:
     cmp byte [rbp + MI_CHECK], 0
     je .hint
     mov edx, r12d
-    add edx, MENU_W - 40
+    add edx, [menu_w]
+    sub edx, 40
     lea ecx, [r15d + 6]
     lea rdi, [menu_check]
     mov esi, 3
@@ -1135,7 +1249,8 @@ draw_menu_rows:
     test edx, edx
     jz .next
     mov edi, r12d
-    add edi, MENU_W - 40
+    add edi, [menu_w]
+    sub edi, 40
     lea esi, [r15d + 9]
     call draw_keycap
 .next:

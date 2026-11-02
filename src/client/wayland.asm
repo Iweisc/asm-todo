@@ -595,6 +595,8 @@ on_pointer:
     mov [pointer_y], eax
     jmp ui_pointer_moved
 .button:
+    cmp dword [rdx + 8], 0x111              ; BTN_RIGHT
+    je .right
     cmp dword [rdx + 8], 0x110              ; BTN_LEFT
     jne .done
     cmp dword [rdx + 12], 1                 ; pressed
@@ -604,6 +606,10 @@ on_pointer:
     mov eax, [rdx + 4]
     mov [pointer_time], eax
     jmp ui_click
+.right:
+    cmp dword [rdx + 12], 1
+    jne .done
+    jmp ui_right_click
 .axis:
     mov esi, [rdx + 4]                      ; 0 vertical, 1 sideways
     cmp esi, 1

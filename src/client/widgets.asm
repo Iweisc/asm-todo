@@ -986,6 +986,8 @@ draw_item_icon:
     je .avatar
     cmp eax, IC_DOT
     je .dot
+    cmp eax, IC_GLYPH
+    je .glyph
     cmp eax, IC_PLUS
     jne .done
     lea edi, [r12d + 6]
@@ -1041,6 +1043,13 @@ draw_item_icon:
     mov edx, 18
     mov ecx, [rbx + MI_ICON_ARG]
     call aa_disc
+    jmp .done
+.glyph:
+    mov edi, [rbx + MI_ICON_ARG]
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, C_DIM
+    call draw_glyph
 .done:
     pop r13
     pop r12

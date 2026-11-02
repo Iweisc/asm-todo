@@ -33,6 +33,7 @@ global _start
 %include "text.asm"
 %include "shapes.asm"
 %include "icons.asm"
+%include "glyphs.asm"
 %include "wayland.asm"
 %include "net.asm"
 %include "sync.asm"
@@ -41,6 +42,7 @@ global _start
 %include "widgets.asm"
 %include "menu.asm"
 %include "views.asm"
+%include "chips.asm"
 %include "sidebar.asm"
 %include "chat.asm"
 %include "comments.asm"
@@ -60,6 +62,7 @@ global _start
 %include "png.asm"
 %include "thumbs.asm"
 %include "attach.asm"
+%include "pick.asm"
 
 section .rodata
 t_server:       db "127.0.0.1:18080", 0
@@ -216,6 +219,7 @@ _start:
     call auth_tests
     call tz_tests
     call keymap_tests
+    call controls_tests
     xor edi, edi
     cmp dword [failures], 0
     setne dil
@@ -1493,3 +1497,4 @@ tz_tests:
     call check
     pop rbx
     ret
+%include "tests/ui_controls.asm"

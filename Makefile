@@ -19,7 +19,7 @@ build/crypto-test: tests/crypto_test.asm $(COMMON)
 	$(NASM) tests/crypto_test.asm -o build/crypto-test.o
 	$(LD) build/crypto-test.o -o $@
 
-build/ui-test: tests/ui_test.asm src/client/*.asm $(COMMON)
+build/ui-test: tests/ui_test.asm tests/ui_controls.asm src/client/*.asm $(COMMON)
 	@mkdir -p build
 	$(NASM) tests/ui_test.asm -o build/ui-test.o
 	$(LD) build/ui-test.o -o $@

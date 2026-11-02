@@ -4,7 +4,6 @@ bigfile src/client/views.asm
 long src/client/sync.asm rebuild_view
 long src/client/views.asm draw_board
 long src/client/views.asm draw_create
-long src/client/views.asm draw_row
 long tests/crypto_test.asm fuzz
 long tests/crypto_test.asm vectors
 nocomment src/client/draw.asm reset_clip

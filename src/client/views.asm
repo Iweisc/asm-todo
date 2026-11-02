@@ -1111,13 +1111,20 @@ draw_row:
     mov r9d, [rbx + CI_ID]
     call add_hit
 
+    ; No priority is only shown on hover, as the place to click to set one.
+    movzx edx, byte [rbx + CI_PRIORITY]
+    test edx, edx
+    jnz .priority
+    cmp dword [rsp + 8], C_PANEL
+    je .priority_hit
+.priority:
     lea edi, [r12d + 20]
     lea esi, [r13d + 12]
-    movzx edx, byte [rbx + CI_PRIORITY]
     mov ecx, C_DIM
     mov r8d, C_FAINT
     mov r9d, [rsp + 8]
     call draw_priority_icon
+.priority_hit:
     lea edi, [r12d + 14]
     lea esi, [r13d + 7]
     mov edx, 26
@@ -1171,30 +1178,12 @@ draw_row:
     mov r8d, INK(C_FAINT, ST_SMALL)
     call draw_scratch
     sub ebp, 10
-    movzx eax, byte [rbx + CI_PROJECT]
-    test eax, eax
-    jz .labels
-    dec eax
-    imul eax, eax, PJ_SIZE
-    lea rdi, [view_projects + rax]
-    call .chip
-.labels:
-    mov dword [rsp], LABEL_SLOTS - 1        ; right to left, so they read in slot order
-.label:
-    mov ecx, [rsp]
-    test ecx, ecx
-    js .title
-    movzx eax, word [rbx + CI_LABELS]
-    bt eax, ecx
-    jnc .next_label
-    imul eax, ecx, LB_SIZE
-    lea rdi, [view_labels + rax]
-    call .chip
-    test eax, eax
-    jz .title
-.next_label:
-    dec dword [rsp]
-    jmp .label
+    mov edi, ebp
+    mov esi, r13d
+    mov edx, r15d
+    mov rcx, rbx
+    call row_chips
+    mov ebp, eax
 .title:
     mov edi, r15d
     lea esi, [r13d + 24]
@@ -1213,40 +1202,6 @@ draw_row:
     pop rbp
     pop rbx
     ret
-; A label or project chip ending at ebp, if it leaves the title some room.
-; rdi = the label or project -> eax = 0 when there wasn't room
-.chip:
-    push r12
-    mov r12, rdi
-    xor eax, eax
-    cmp byte [r12 + LB_NAME_LEN], 0
-    je .chip_skip                           ; a deleted label
-    lea rdi, [r12 + LB_NAME]
-    movzx esi, byte [r12 + LB_NAME_LEN]
-    mov edx, 1
-    call chip_width
-    mov ecx, ebp
-    sub ecx, eax
-    lea edx, [r15d + 160]
-    cmp ecx, edx
-    jl .no_room
-    mov ebp, ecx
-    mov edi, ebp
-    lea esi, [r13d + 7]
-    lea rdx, [r12 + LB_NAME]
-    movzx ecx, byte [r12 + LB_NAME_LEN]
-    mov r8d, [r12 + LB_COLOR]
-    call draw_chip
-    sub ebp, 6
-.chip_skip:
-    mov eax, 1
-    pop r12
-    ret
-.no_room:
-    xor eax, eax
-    pop r12
-    ret
-
 %define CARD_H          94
 
 ; One issue on the board. edi = x, esi = y, edx = w, rcx = view issue
@@ -1314,6 +1269,25 @@ draw_card:
     call draw_text_fit
 
     ; Priority in a little box, then the project and labels while they fit.
+    ; No priority leaves the box out unless the card's hovered.
+    ; When it was made at the bottom right, and the chips stop short of it.
+    lea rdi, [scratch]
+    mov esi, [rbx + CI_CREATED]
+    call put_date
+    lea rdx, [scratch]
+    mov rcx, rdi
+    sub rcx, rdx
+    lea edi, [r12d + r14d - 14]
+    lea esi, [r13d + 75]
+    mov r8d, INK(C_FAINT, ST_SMALL)
+    call draw_link
+    lea r15d, [eax - 8]                     ; where chips must end
+    lea ebp, [r12d + 14]                    ; chip x
+    cmp byte [rbx + CI_PRIORITY], 0
+    jne .priority
+    cmp dword [rsp + 8], C_RAISED
+    je .chips
+.priority:
     lea edi, [r12d + 14]
     lea esi, [r13d + 58]
     mov edx, 24
@@ -1329,33 +1303,13 @@ draw_card:
     mov r8d, C_FAINT
     mov r9d, [rsp + 8]
     call draw_priority_icon
-    lea ebp, [r12d + 44]                    ; chip x
-    lea r15d, [r12d + r14d - 14]            ; where chips must end
-    movzx eax, byte [rbx + CI_PROJECT]
-    test eax, eax
-    jz .labels
-    dec eax
-    imul eax, eax, PJ_SIZE
-    lea rdi, [view_projects + rax]
-    call .chip
-.labels:
-    mov dword [rsp], 0
-.label:
-    mov ecx, [rsp]
-    cmp ecx, LABEL_SLOTS
-    jae .done
-    movzx eax, word [rbx + CI_LABELS]
-    bt eax, ecx
-    jnc .next_label
-    imul eax, ecx, LB_SIZE
-    lea rdi, [view_labels + rax]
-    call .chip
-    test eax, eax
-    jz .done
-.next_label:
-    inc dword [rsp]
-    jmp .label
-.done:
+    add ebp, 30
+.chips:
+    mov edi, ebp
+    mov esi, r13d
+    mov edx, r15d
+    mov rcx, rbx
+    call card_chips
     add rsp, 24
     pop r15
     pop r14
@@ -1363,34 +1317,6 @@ draw_card:
     pop r12
     pop rbp
     pop rbx
-    ret
-; A chip at ebp, if it fits before r15d. rdi = label or project -> eax = 0 if it didn't
-.chip:
-    push r12
-    mov r12, rdi
-    cmp byte [r12 + LB_NAME_LEN], 0
-    je .chip_skip
-    lea rdi, [r12 + LB_NAME]
-    movzx esi, byte [r12 + LB_NAME_LEN]
-    mov edx, 1
-    call chip_width
-    lea ecx, [ebp + eax]
-    cmp ecx, r15d
-    jg .no_room
-    mov edi, ebp
-    lea ebp, [ecx + 6]
-    lea esi, [r13d + 58]
-    lea rdx, [r12 + LB_NAME]
-    movzx ecx, byte [r12 + LB_NAME_LEN]
-    mov r8d, [r12 + LB_COLOR]
-    call draw_chip
-.chip_skip:
-    mov eax, 1
-    pop r12
-    ret
-.no_room:
-    xor eax, eax
-    pop r12
     ret
 
 ; The board: a column per status. edi = x, esi = top, edx = w, ecx = h
@@ -2123,7 +2049,7 @@ draw_comment_box:
     call field_addr
     mov rdi, [rax + FD_BUF]
     mov esi, [rax + FD_LEN]
-    lea edx, [r15d - 24]
+    lea edx, [r15d - 24 - BOX_BUTTONS_W]
     mov ecx, ST_BODY
     call text_height
     lea ebp, [eax + 24]
@@ -2151,8 +2077,12 @@ draw_comment_box:
     mov edi, F_COMMENT
     lea esi, [r14d + 12]
     lea edx, [r12d + 12]
-    lea ecx, [r15d - 24]
+    lea ecx, [r15d - 24 - BOX_BUTTONS_W]
     call draw_area
+    mov edi, F_COMMENT
+    lea esi, [r14d + r15d]
+    lea edx, [r12d + ebp]
+    call draw_box_buttons
     lea r12d, [r12d + ebp + 8]
     test r13d, r13d
     jz .done

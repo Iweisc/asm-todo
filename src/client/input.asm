@@ -310,7 +310,7 @@ ui_click:
     call disarm_others
     mov eax, [hover_action]
     mov edi, [hover_arg]
-    cmp eax, A_DROP_ATTACHMENT
+    cmp eax, A_SEND
     ja .done
     jmp [.table + rax * 8]
 .table:
@@ -322,6 +322,7 @@ ui_click:
     dq open_team_settings, submit_invite, click_set_role, save_team_name
     dq open_channel_dialog, submit_channel, click_delete_channel
     dq .nothing, start_message_edit, click_delete_message, open_image_view, attach_drop
+    dq pick_image, click_send
 .nothing:
     ; Clicking empty space leaves whatever field was being edited.
     cmp dword [focus], F_PASS

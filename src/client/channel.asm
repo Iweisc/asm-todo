@@ -334,7 +334,16 @@ draw_side_channels:
 .general:
     call put_mem
 .named:
-    lea rdx, [scratch]
+    push rdi
+    push rdi
+    mov edi, GL_HASH
+    mov esi, 18
+    lea edx, [ebx + 7]
+    mov ecx, C_DIM
+    call draw_glyph
+    pop rdi
+    pop rdi
+    lea rdx, [scratch + 1]                  ; the glyph stands in for the "#"
     mov rcx, rdi
     sub rcx, rdx
     mov edi, 44

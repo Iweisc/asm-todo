@@ -331,7 +331,7 @@ draw_composer:
     mov rdi, [rax + FD_BUF]
     mov esi, [rax + FD_LEN]
     mov edx, [rsp]
-    sub edx, 24
+    sub edx, 24 + BOX_BUTTONS_W
     mov ecx, ST_BODY
     call text_height
     lea ebp, [eax + 24]                     ; the box's height
@@ -369,8 +369,13 @@ draw_composer:
     lea esi, [ebx + 12]
     lea edx, [r12d + 12]
     mov ecx, [rsp]
-    sub ecx, 24
+    sub ecx, 24 + BOX_BUTTONS_W
     call draw_area
+    mov edi, F_MESSAGE
+    mov esi, ebx
+    add esi, [rsp]
+    lea edx, [r12d + ebp]
+    call draw_box_buttons
     test r13d, r13d
     jz .done
     mov edi, ebx

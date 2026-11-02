@@ -22,6 +22,7 @@
 %define COL_MIN_W       200
 %define LINE_H          20              ; wrapped body text
 %define MENU_W          520
+%define MENU_CTX_W      300             ; a right click's menu
 %define MENU_ROW_H      36
 %define MENU_MAX        128             ; the filter menu: every label, project, priority and member
 %define MENU_SHOWN      9               ; rows visible at once
@@ -189,6 +190,9 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define A_DELETE_MESSAGE 43             ; arg = message id
 %define A_IMAGE         44              ; arg = image id, opens it
 %define A_DROP_ATTACHMENT 45            ; arg = the field whose attachment goes
+%define A_ATTACH_PICK   46              ; arg = the field to attach a file to
+%define A_SEND          47              ; arg = the field to send
+%define BOX_BUTTONS_W   76              ; what a box's text leaves clear for them
 
 ; Views of a team's issues
 %define V_ALL           0
@@ -222,7 +226,12 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define MI_VALUE        20
 %define MI_CHECK        24
 %define MI_HINT         25              ; a shortcut letter, 0 for none
+%define MI_GROUP        26              ; FG_*, what a filter item filters by, 0 elsewhere
 %define MI_SIZE         32
+%define FG_LABEL        1
+%define FG_PROJECT      2
+%define FG_PRIORITY     3
+%define FG_ASSIGNEE     4
 %define IC_NONE         0
 %define IC_STATUS       1
 %define IC_PRIORITY     2
@@ -230,6 +239,29 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define IC_DOT          4               ; arg = color
 %define IC_PLUS         5
 %define IC_ISSUE        6               ; arg = status. Matched by the caller, by title or ID
+%define IC_GLYPH        7               ; arg = GL_*
+
+; glyphs.asm's line icons, in the order of line_icons
+%define GL_SEND         0
+%define GL_IMAGE        1
+%define GL_SETTINGS     2
+%define GL_PERSON       3
+%define GL_ISSUES       4
+%define GL_ACTIVE       5
+%define GL_BACKLOG      6
+%define GL_HASH         7
+%define GL_PLUS         8
+%define GL_BARS         9
+%define GL_TAG          10
+%define GL_CUBE         11
+%define GL_COPY         12
+%define GL_TRASH        13
+%define GL_GRID         14
+%define GL_LIST         15
+%define GL_FUNNEL       16
+%define GL_CROSS        17
+%define GL_LOCK         18
+%define GL_LOGOUT       19
 
 ; Command menu entries, in MI_VALUE
 %define CMD_NEW_ISSUE   1
@@ -373,6 +405,11 @@ menu_issue:     resd 1                  ; what the menu changes, 0 for the new i
 menu_sel:       resd 1
 menu_scroll:    resd 1
 menu_count:     resd 1
+menu_group:     resd 1                  ; the FG_* push_item gives what it adds
+menu_w:         resd 1                  ; this frame's width
+menu_ax:        resd 1                  ; where a right click's menu opens
+menu_ay:        resd 1
+menu_context:   resb 1                  ; 1 when the menu came from a right click
 menu_wheel:     resd 1                  ; wheel pixels short of a whole notch
 delete_armed:   resd 1                  ; the issue whose Delete was clicked once, or 0
 menu_items:     resb MENU_MAX * MI_SIZE

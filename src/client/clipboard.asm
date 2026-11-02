@@ -6,6 +6,9 @@
 ; with its types, then made the clipboard by selection. Pasting asks the
 ; offer to write into a pipe and reads it. Pasting our own copy skips that,
 ; since we'd be waiting on ourselves.
+;
+; A drag over the window comes as an offer too, announced the same way, then
+; enter, leave and drop. A PNG or a file dropped goes to attach.asm.
 
 %define CLIP_MAX        DESC_MAX                ; the longest field
 %define PASTE_MAX       8192                    ; UTF-8 can take a few bytes per character
@@ -17,8 +20,12 @@
 %define DD_SET_SELECTION    1
 %define DS_OFFER            0
 %define DS_DESTROY          1
+%define DO_ACCEPT           0
 %define DO_RECEIVE          1
 %define DO_DESTROY          2
+%define DO_FINISH           3
+%define DO_SET_ACTIONS      4
+%define DND_COPY            1
 
 section .rodata
 s_type_utf8:        db "text/plain;charset=utf-8", 0
@@ -46,6 +53,8 @@ new_offer:          resd 1                  ; the offer being described, before 
 new_types:          resd 1
 clip_offer:         resd 1                  ; what someone else copied, or 0
 clip_types:         resd 1
+drag_offer:         resd 1                  ; what's dragged over us, if we'd take it
+drag_types:         resd 1
 input_serial:       resd 1                  ; the last key or button press, which set_selection needs
 clip_len:           resd 1
 clip_buf:           resb CLIP_MAX
@@ -77,12 +86,26 @@ destroy_offer:
     call wl_begin
     jmp wl_end
 
-; wl_data_device.data_offer(new offer) / selection(offer or null)
+; wl_data_device.data_offer(new offer) / enter / leave / drop / selection(offer or null)
 on_data_device:
     test esi, esi
     jz .offer
+    cmp esi, 1
+    je drag_enter
+    cmp esi, 2
+    je .leave
+    cmp esi, 4
+    je .drop
     cmp esi, 5
     je .selection
+    ret
+.leave:
+    ; The offer is left for the next data_offer to destroy, like any other.
+    mov dword [drag_offer], 0
+    ret
+.drop:
+    cmp dword [drag_offer], 0
+    jne attach_dropped
     ret
 .offer:
     ; One that came and went without becoming the clipboard, like a drag
@@ -119,6 +142,86 @@ on_data_device:
     mov [clip_types], ecx
     mov dword [new_offer], 0
 .done:
+    ret
+
+; wl_data_device.enter(serial, surface, x, y, offer): a drag came over the
+; window. It's taken if it's a PNG or a file and a box is open to attach it
+; to. rdx = the event's args
+drag_enter:
+    push rbx
+    push r12
+    push r13
+    mov ebx, [rdx]                          ; serial
+    mov r12d, [rdx + 16]
+    mov dword [drag_offer], 0
+    xor r13d, r13d                          ; the type we'd take
+    test r12d, r12d
+    jz .done
+    cmp r12d, [new_offer]
+    jne .answer
+    call drop_field
+    cmp eax, F_NONE
+    je .answer
+    lea r13, [s_type_png]
+    bt dword [new_types], PASTE_PNG
+    jc .take
+    lea r13, [s_type_uri_list]
+    bt dword [new_types], PASTE_URI
+    jc .take
+    xor r13d, r13d
+    jmp .answer
+.take:
+    mov [drag_offer], r12d
+    mov eax, [new_types]
+    mov [drag_types], eax
+.answer:
+    mov edi, r12d
+    mov esi, DO_ACCEPT
+    call wl_begin
+    mov edi, ebx
+    call wl_u32
+    test r13, r13
+    jz .refuse
+    mov rdi, r13
+    call wl_str
+    jmp .accepted
+.refuse:
+    xor edi, edi                            ; a null type
+    call wl_u32
+.accepted:
+    call wl_end
+    test r13, r13
+    jz .done
+    mov edi, r12d
+    mov esi, DO_SET_ACTIONS
+    call wl_begin
+    mov edi, DND_COPY
+    call wl_u32
+    mov edi, DND_COPY
+    call wl_u32
+    call wl_end
+.done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; Tells the app the drop came from that it's done with, and lets the offer go.
+drag_done:
+    sub rsp, 8
+    mov edi, [drag_offer]
+    mov esi, DO_FINISH
+    call wl_begin
+    call wl_end
+    mov edi, [drag_offer]
+    call destroy_offer
+    mov eax, [drag_offer]
+    cmp eax, [new_offer]
+    jne .gone
+    mov dword [new_offer], 0
+.gone:
+    mov dword [drag_offer], 0
+    add rsp, 8
     ret
 
 ; wl_data_offer.offer(type), for the offer data_offer just announced
@@ -270,6 +373,7 @@ clip_paste:
     mov rbx, [text_types + rax * 8]
     lea rdi, [paste_buf]
     mov esi, PASTE_MAX
+    mov edx, [clip_offer]
     call read_offer
     test eax, eax
     jz .done
@@ -287,16 +391,19 @@ clip_paste:
     pop rbx
     ret
 
-; Has clip_offer write itself into a pipe and reads it.
-; rbx = the type to ask for, rdi = where to, esi = room there -> eax = bytes read
+; Has an offer write itself into a pipe and reads it.
+; rbx = the type to ask for, rdi = where to, esi = room there, edx = the offer
+; -> eax = bytes read
 read_offer:
     push rbx
     push r12
     push r13
     push r14
-    sub rsp, 24
+    push r15
+    sub rsp, 16
     mov r13, rdi
     mov r14d, esi
+    mov r15d, edx
     mov eax, SYS_pipe2
     mov rdi, rsp
     mov esi, O_CLOEXEC
@@ -304,7 +411,7 @@ read_offer:
     test eax, eax
     js .fail
     call wl_flush                           ; the fd goes with the next flush's first chunk
-    mov edi, [clip_offer]
+    mov edi, r15d
     mov esi, DO_RECEIVE
     call wl_begin
     mov rdi, rbx
@@ -352,7 +459,8 @@ read_offer:
 .fail:
     xor eax, eax
 .done:
-    add rsp, 24
+    add rsp, 16
+    pop r15
     pop r14
     pop r13
     pop r12

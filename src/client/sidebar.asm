@@ -318,13 +318,12 @@ draw_side_teams:
     mov esi, A_VIEW
     mov edx, V_MINE
     call side_row
-    mov edi, 4 * 25                         ; an avatar-sized ring for "me"
-    lea esi, [ebx * 4 + 56]
-    mov edx, 24
+    mov edi, GL_PERSON
+    mov esi, 18
+    lea edx, [ebx + 7]
     mov ecx, C_DIM
-    mov r8d, 6
-    call aa_ring
-    mov edi, 40
+    call draw_glyph
+    mov edi, 44
     mov esi, ebx
     lea rdx, [s_my_issues]
     mov ecx, s_my_issues_len
@@ -358,20 +357,35 @@ draw_side_teams:
     mov r8d, C_ACCENT
     mov r9d, 5
     call fill_rrect
-    lea rdx, [r12 + CO_KEY]
-    mov edi, 20
+    ; The name's first letter, so a renamed team's badge follows it.
+    movzx eax, byte [r12 + CO_NAME]
+    lea ecx, [eax - 'a']
+    cmp ecx, 25
+    ja .upper
+    sub eax, 32
+.upper:
+    mov [rsp], al
+    mov rdi, rsp
+    mov esi, 1
+    mov edx, ST_SMALL
+    call text_width
+    mov edi, 18
+    sub edi, eax
+    sar edi, 1
+    add edi, 16
     lea esi, [ebx + 18]
+    mov rdx, rsp
     mov ecx, 1
     mov r8d, INK(0xffffff, ST_SMALL)
     call draw_text
-    mov r9d, SIDEBAR_W - 68
+    mov r9d, SIDEBAR_W - 60
     mov eax, [r12 + CO_ID]
     cmp eax, [current_team]
     jne .name
     mov edi, ebx
+    mov esi, eax
     call draw_settings_link
-    mov r9d, eax                            ; the name stops short of the link
-    sub r9d, 44 + 8
+    mov r9d, SIDEBAR_W - 44 - 44            ; the name stops short of it
 .name:
     mov edi, 44
     lea esi, [ebx + 19]
@@ -401,35 +415,53 @@ draw_side_teams:
     pop rbx
     ret
 
-; "Settings" on the current team's row, brighter while hovered.
-; edi = row y -> eax = the link's left x
+; The settings button at the end of the current team's row, which only
+; shows while the row or the button is under the pointer.
+; edi = row y, esi = the team
 draw_settings_link:
     push rbx
     push r12
     push r13
     mov ebx, edi
+    mov r12d, esi
     mov edi, A_SETTINGS
     mov esi, F_NONE
     call hovering
-    mov r8d, C_FAINT
-    mov ecx, C_TEXT
+    mov r13d, eax
     test eax, eax
-    cmovnz r8d, ecx
-    mov edi, SIDEBAR_W - 18
-    lea esi, [ebx + 19]
-    lea rdx, [s_settings]
-    mov ecx, s_settings_len
-    call draw_link
-    mov r12d, eax
-    mov r13d, edx
-    lea edi, [r12d - 6]
-    mov esi, ebx
-    lea edx, [r13d + 12]
-    mov ecx, 28
+    jnz .draw
+    mov edi, A_TEAM
+    mov esi, r12d
+    call hovering
+    test eax, eax
+    jz .hit
+.draw:
+    test r13d, r13d
+    jz .glyph
+    mov edi, SIDEBAR_W - 41
+    lea esi, [ebx + 2]
+    mov edx, 24
+    mov ecx, 24
+    mov r8d, C_LINE
+    mov r9d, 5
+    call fill_rrect
+.glyph:
+    mov edi, GL_SETTINGS
+    mov esi, SIDEBAR_W - 36
+    lea edx, [ebx + 7]
+    mov ecx, C_DIM
+    mov eax, C_TEXT
+    test r13d, r13d
+    cmovnz ecx, eax
+    call draw_glyph
+.hit:
+    mov edi, SIDEBAR_W - 41
+    lea esi, [ebx + 2]
+    mov edx, 24
+    mov ecx, 24
     mov r8d, A_SETTINGS
     mov r9d, F_NONE
     call add_hit
-    mov eax, r12d
     pop r13
     pop r12
     pop rbx
@@ -455,6 +487,11 @@ draw_team_views:
     mov esi, A_VIEW
     mov edx, r14d
     call side_row
+    lea edi, [r14d + GL_ISSUES]             ; V_ALL, V_ACTIVE and V_BACKLOG in order
+    mov esi, 30
+    lea edx, [ebx + 7]
+    mov ecx, C_DIM
+    call draw_glyph
     lea rdi, [s_issues]
     mov esi, s_issues_len
     cmp r14d, V_ALL
@@ -468,7 +505,7 @@ draw_team_views:
 .view_text:
     mov rdx, rdi
     mov ecx, esi
-    mov edi, 52
+    mov edi, 54
     mov esi, ebx
     call side_text
     add ebx, 30
@@ -525,7 +562,7 @@ draw_side_projects:
     lea eax, [r14d + 28]
     cmp ebx, eax
     jne .project_heading
-    mov ebx, r14d                           ; no projects, no heading
+    lea ebx, [r14d - 12]                    ; no projects, no heading and no gap
     jmp .done
 .project_heading:
     mov edi, r14d
