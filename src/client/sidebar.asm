@@ -172,6 +172,45 @@ side_plus:
     pop rbx
     ret
 
+; Who's logged in, at the top, which opens the account dialog.
+draw_side_account:
+    sub rsp, 8
+    mov edi, A_ACCOUNT
+    mov esi, ACC_PROFILE
+    call hovering
+    test eax, eax
+    jz .account_hit
+    mov edi, 8
+    mov esi, 10
+    mov edx, SIDEBAR_W - 16
+    mov ecx, 28
+    mov r8d, C_HOVER
+    mov r9d, 6
+    call fill_rrect
+.account_hit:
+    mov edi, 8
+    mov esi, 10
+    mov edx, SIDEBAR_W - 16
+    mov ecx, 28
+    mov r8d, A_ACCOUNT
+    mov r9d, ACC_PROFILE
+    call add_hit
+    mov edi, 16
+    mov esi, 14
+    mov edx, 20
+    mov ecx, [my_id]
+    lea r8, [my_name]
+    call draw_avatar
+    mov edi, 44
+    mov esi, 29
+    lea rdx, [my_name]
+    mov ecx, [my_name_len]
+    mov r8d, INK(C_TEXT, ST_MEDIUM)
+    mov r9d, SIDEBAR_W - 60
+    call draw_text_fit
+    add rsp, 8
+    ret
+
 ; The sidebar: who's logged in and the new issue button, then the teams,
 ; projects and members, which scroll when they don't fit.
 draw_sidebar:
@@ -185,19 +224,7 @@ draw_sidebar:
     sub ecx, 64
     call set_clip
 
-    mov edi, 16                             ; who's logged in
-    mov esi, 14
-    mov edx, 20
-    mov ecx, [my_id]
-    lea r8, [my_name]
-    call draw_avatar
-    mov edi, 44
-    mov esi, 29
-    lea rdx, [my_name]
-    mov ecx, [my_name_len]
-    mov r8d, INK(C_TEXT, ST_MEDIUM)
-    mov r9d, SIDEBAR_W - 60
-    call draw_text_fit
+    call draw_side_account
 
     mov r12d, 44                            ; where the scrolling rows start
     cmp dword [current_team], 0             ; nowhere to put a new issue yet
@@ -360,34 +387,11 @@ draw_side_teams:
     mov esi, A_TEAM
     mov edx, [r12 + CO_ID]
     call side_row
-    mov edi, 16                             ; the team's badge
+    mov edi, 16
     lea esi, [ebx + 5]
     mov edx, 18
-    mov ecx, 18
-    mov r8d, C_ACCENT
-    mov r9d, 5
-    call fill_rrect
-    ; The name's first letter, so a renamed team's badge follows it.
-    movzx eax, byte [r12 + CO_NAME]
-    lea ecx, [eax - 'a']
-    cmp ecx, 25
-    ja .upper
-    sub eax, 32
-.upper:
-    mov [rsp], al
-    mov rdi, rsp
-    mov esi, 1
-    mov edx, ST_SMALL
-    call text_width
-    mov edi, 18
-    sub edi, eax
-    sar edi, 1
-    add edi, 16
-    lea esi, [ebx + 18]
-    mov rdx, rsp
-    mov ecx, 1
-    mov r8d, INK(0xffffff, ST_SMALL)
-    call draw_text
+    mov rcx, r12
+    call draw_team_badge
     mov r9d, SIDEBAR_W - 60
     mov eax, [r12 + CO_ID]
     cmp eax, [current_team]

@@ -109,6 +109,10 @@ run_command:
     je .invite
     cmp ebx, CMD_NEW_CHANNEL
     je .new_channel
+    cmp ebx, CMD_ACCOUNT
+    je .account
+    cmp ebx, CMD_ALL_TEAMS
+    je .all_teams
     cmp ebx, CMD_NEW_ISSUE
     je .new_issue
     cmp ebx, CMD_LAYOUT
@@ -146,7 +150,16 @@ run_command:
     call open_labels_modal
     jmp .done
 .password:
-    call open_password_modal
+    mov edi, ACC_SECURITY
+    call open_account
+    jmp .done
+.account:
+    mov edi, ACC_PROFILE
+    call open_account
+    jmp .done
+.all_teams:
+    mov edi, ACC_TEAMS
+    call open_account
     jmp .done
 .settings:
     mov edi, F_NONE
@@ -295,6 +308,8 @@ disarm_others:
     je .channel
     cmp edi, A_BAN_HISTORY
     je .channel
+    cmp edi, A_TRANSFER
+    je .channel
     mov [member_armed], eax
 .channel:
     cmp edi, A_DELETE_CHANNEL
@@ -306,8 +321,18 @@ disarm_others:
     mov [message_armed], eax
 .role:
     cmp edi, A_DELETE_ROLE
-    je .done
+    je .account
     mov [role_armed], al
+.account:
+    cmp edi, A_LEAVE_TEAM
+    je .team
+    cmp edi, A_DELETE_ACCOUNT
+    je .team
+    mov [account_armed], eax
+.team:
+    cmp edi, A_DELETE_TEAM
+    je .done
+    mov [team_delete_armed], al
 .done:
     ret
 
@@ -320,7 +345,7 @@ ui_click:
     call disarm_others
     mov eax, [hover_action]
     mov edi, [hover_arg]
-    cmp eax, A_NEW_ROLE
+    cmp eax, A_DELETE_TEAM
     ja .done
     jmp [.table + rax * 8]
 .table:
@@ -337,6 +362,8 @@ ui_click:
     dq click_toggle_role, save_nickname, click_ban_history, click_edit_role, click_role_color
     dq click_role_perm, click_move_role, save_role, click_delete_role, click_automod_timeout
     dq save_automod, click_slowmode, click_override, click_new_role
+    dq open_account, click_account_tab, click_end_session, click_delete_account
+    dq click_leave_team, click_team_settings, click_go_team, click_transfer, click_delete_team
 .nothing:
     ; Clicking empty space leaves whatever field was being edited.
     cmp dword [focus], F_PASS
@@ -504,6 +531,8 @@ ui_scroll:
     je .settings
     cmp byte [modal], M_CHANNEL
     je .channel
+    cmp byte [modal], M_ACCOUNT
+    je .account
     cmp byte [modal], M_NONE
     jne .done
     cmp dword [pointer_x], SIDEBAR_W
@@ -529,6 +558,9 @@ ui_scroll:
     jmp .vertical
 .channel:
     lea rax, [chan_scroll]
+    jmp .vertical
+.account:
+    lea rax, [account_scroll]
     jmp .vertical
 .detail:
     lea rax, [detail_scroll]

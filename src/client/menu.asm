@@ -39,6 +39,8 @@ text c_password,        "Change password"
 text c_settings,        "Team settings"
 text c_invite,          "Invite people"
 text c_new_channel,     "New channel"
+text c_account,         "Account settings"
+text c_all_teams,       "All teams"
 
 %define ISSUE_RESULTS   20              ; issues the command menu lists for a search
 
@@ -90,7 +92,9 @@ commands:
     COMMAND c_new_channel, CMD_NEW_CHANNEL, 0, WHEN_ALWAYS, GL_HASH
     COMMAND c_invite, CMD_INVITE, 0, WHEN_ALWAYS, GL_PERSON
     COMMAND c_settings, CMD_SETTINGS, 0, WHEN_ALWAYS, GL_SETTINGS
+    COMMAND c_all_teams, CMD_ALL_TEAMS, 0, WHEN_ALWAYS, GL_GRID
     COMMAND c_new_team, CMD_NEW_TEAM, 0, WHEN_ALWAYS, GL_PLUS
+    COMMAND c_account, CMD_ACCOUNT, 0, WHEN_ALWAYS, GL_PERSON
     COMMAND c_password, CMD_PASSWORD, 0, WHEN_ALWAYS, GL_LOCK
     COMMAND c_log_out, CMD_LOGOUT, 0, WHEN_ALWAYS, GL_LOGOUT
     dq 0

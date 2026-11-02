@@ -897,6 +897,77 @@ h_set_role:
     pop rbx
     ret
 
+; MSG_TRANSFER_OWNER: an owner makes a member an owner and becomes a member.
+h_transfer_owner:
+    push rbx
+    push r12
+    push r13
+    push r14
+    sub rsp, 8
+    call rd_u32
+    mov r12d, eax                           ; team
+    call rd_u32
+    mov r13d, eax                           ; who takes over
+    call rd_ok
+    test eax, eax
+    jz .violation
+    mov rax, [cur]
+    cmp [rax + C_USER], r13d
+    je .violation
+    mov edi, r12d
+    call require_owner
+    test eax, eax
+    jz .done
+    mov edi, r12d
+    mov esi, r13d
+    call find_member
+    test rax, rax
+    jz .not_theirs
+    mov rbx, rax
+    mov rax, [cur]
+    mov esi, [rax + C_USER]
+    mov edi, r12d
+    call find_member
+    mov r14, rax
+    mov byte [rbx + MEM_ROLE], ROLE_OWNER
+    mov dword [rbx + MEM_TIMEOUT], 0
+    mov byte [r14 + MEM_ROLE], ROLE_MEMBER
+    mov edi, T_MEMBERS
+    mov rsi, rbx
+    call db_touch
+    mov edi, T_MEMBERS
+    mov rsi, r14
+    call db_touch
+    mov edi, r12d
+    mov esi, AU_TRANSFER
+    mov edx, r13d
+    xor ecx, ecx
+    xor r8d, r8d
+    xor r9d, r9d
+    call audit_add
+    call db_commit
+    mov edi, r13d
+    call send_teams_to_user
+    mov edi, [r14 + MEM_USER]
+    call send_teams_to_user
+    mov edi, r12d
+    call permissions_changed
+    jmp .done
+.violation:
+    call kill_cur
+    jmp .done
+.not_theirs:
+    lea rsi, [e_not_their_team]
+    mov edx, e_not_their_team_len
+    call send_error
+.done:
+    add rsp, 8
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
 ; MSG_RENAME_TEAM: PERM_MANAGE_TEAM. Every member's team list shows the new name.
 h_rename_team:
     push rbx

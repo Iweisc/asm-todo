@@ -5,6 +5,7 @@
 %define JOB_REGISTER        2
 %define JOB_CHECK_PASSWORD  3               ; the current password, before a change
 %define JOB_NEW_PASSWORD    4
+%define JOB_DELETE_ACCOUNT  5               ; the password, before deleting the account
 %define JOB_SLICE           25000       ; PBKDF2 iterations per event loop turn (~12ms)
 %define MAX_AUTH_FAILS      5
 %define RATE_SLOTS          64
@@ -76,6 +77,11 @@ msg_handlers:
     handler MSG_NICKNAME, h_nickname
     handler MSG_CHANNEL_SETTINGS, h_channel_settings
     handler MSG_SET_AUTOMOD, h_set_automod
+    handler MSG_ACCOUNT_INFO, h_account_info
+    handler MSG_END_SESSION, h_end_session
+    handler MSG_DELETE_ACCOUNT, h_delete_account
+    handler MSG_DELETE_TEAM, h_delete_team
+    handler MSG_TRANSFER_OWNER, h_transfer_owner
 MSG_HANDLERS equ ($ - msg_handlers) / 8
 
 section .text
@@ -629,6 +635,8 @@ finish_job:
     mov eax, [next_user_id]
     mov [r13 + USER_ID], eax
     inc dword [next_user_id]
+    call now_unix
+    mov [r13 + USER_CREATED], eax
     movzx ecx, byte [r12 + C_JOB_NAME_LEN]
     mov [r13 + USER_NAME_LEN], cl
     lea rdi, [r13 + USER_NAME]
@@ -693,18 +701,18 @@ login_success:
     lea rbx, [sessions]
     xor ecx, ecx
     mov r13d, -1
-    mov r8, -1                              ; earliest expiry seen
+    mov r8d, -1                             ; earliest expiry seen
     xor r9d, r9d
 .slot:
     cmp ecx, [n_sessions]
     jae .grow
     cmp dword [rbx + SESS_USER], 0
     je .take
-    cmp [rbx + SESS_EXPIRES], r14
+    cmp [rbx + SESS_EXPIRES], r14d
     jbe .take
-    cmp [rbx + SESS_EXPIRES], r8
+    cmp [rbx + SESS_EXPIRES], r8d
     jae .slot_next
-    mov r8, [rbx + SESS_EXPIRES]
+    mov r8d, [rbx + SESS_EXPIRES]
     mov r9d, ecx
 .slot_next:
     add rbx, SESS_SIZE
@@ -735,8 +743,9 @@ login_success:
     mov eax, [r12 + USER_ID]
     mov [rbx + SESS_USER], eax
     mov dword [rbx + SESS_LAST_OP], 0
-    lea rax, [r14 + SESSION_DAYS * 86400]
-    mov [rbx + SESS_EXPIRES], rax
+    lea eax, [r14d + SESSION_DAYS * 86400]
+    mov [rbx + SESS_EXPIRES], eax
+    mov [rbx + SESS_SEEN], r14d
     mov edi, T_SESSIONS
     mov rsi, rbx
     call db_touch
@@ -822,6 +831,7 @@ send_auth_ok:
     pop rbx
     ret
 
+; MSG_RESUME: logs in with a session's token, and notes when it was last used.
 h_resume:
     push rbx
     push r12
@@ -850,7 +860,7 @@ h_resume:
     jae .expired
     cmp dword [rbx + SESS_USER], 0
     je .next
-    cmp [rbx + SESS_EXPIRES], r14
+    cmp [rbx + SESS_EXPIRES], r14d
     jbe .next
     mov rdi, rsp
     lea rsi, [rbx + SESS_HASH]
@@ -867,6 +877,13 @@ h_resume:
     call find_user
     test rax, rax
     jz .expired
+    mov [rbx + SESS_SEEN], r14d
+    push rax
+    mov edi, T_SESSIONS
+    mov rsi, rbx
+    call db_touch
+    call db_commit
+    pop rax
     mov rcx, [cur]
     mov edx, [rbx + SESS_USER]
     mov [rcx + C_USER], edx
@@ -898,23 +915,38 @@ h_resume:
     pop rbx
     ret
 
+; MSG_LOGOUT: ends this session, here and on every connection using it.
 h_logout:
-    push rbx
-    push r12
     sub rsp, 8
     call rd_ok
     test eax, eax
     jz .violation
-    mov rbx, [cur]
-    mov eax, [rbx + C_SESSION]
+    mov rax, [cur]
+    mov eax, [rax + C_SESSION]
     imul eax, eax, SESS_SIZE
     lea rsi, [sessions + rax]
     mov edi, T_SESSIONS
     call free_row
     call db_commit
-    mov edi, [rbx + C_SESSION]              ; other connections on this session go too
+    mov rax, [cur]
+    mov edi, [rax + C_SESSION]              ; other connections on this session go too
     call kick_session
-    and byte [rbx + C_FLAGS], ~F_KILL       ; ...but this one stays, logged out
+    call log_out_cur
+    jmp .done
+.violation:
+    call kill_cur
+.done:
+    add rsp, 8
+    ret
+
+; Keeps cur's connection open, logged out, once its session is gone, and
+; tells it so.
+log_out_cur:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov rbx, [cur]
+    and byte [rbx + C_FLAGS], ~F_KILL       ; kicking the session marked it too
     mov r12d, [rbx + C_TEAM]
     mov dword [rbx + C_USER], 0
     mov dword [rbx + C_TEAM], 0
@@ -931,9 +963,6 @@ h_logout:
     jz .done
     mov edi, r12d
     call broadcast_members
-    jmp .done
-.violation:
-    call kill_cur
 .done:
     add rsp, 8
     pop r12

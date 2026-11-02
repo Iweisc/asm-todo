@@ -41,6 +41,7 @@
 %define NICKNAME_MAX        32
 %define SLOWMODE_MAX        21600               ; 6 hours, in seconds
 %define AUTOMOD_MAX         1000                ; bytes of a team's blocked words, one per line
+%define ACCOUNT_SESSIONS    32                  ; sessions MSG_ACCOUNT lists, the rest only go with "every other"
 
 ; OWASP's 2023 guidance for PBKDF2-HMAC-SHA256.
 %define PBKDF2_ITERATIONS   600000
@@ -103,6 +104,14 @@
                                                 ; Whoever can rename it, and #general PERM_MANAGE_CHANNELS.
 %define MSG_SET_AUTOMOD     39                  ; u32 team, u32 timeout seconds (0 only blocks), str16 words.
                                                 ; PERM_MANAGE_AUTOMOD.
+%define MSG_ACCOUNT_INFO    40                  ; asks for MSG_ACCOUNT
+%define MSG_END_SESSION     41                  ; u32 session as MSG_ACCOUNT numbers it, or -1 for every one
+                                                ; but this. Answered with MSG_ACCOUNT.
+%define MSG_DELETE_ACCOUNT  42                  ; str password. Not while the last owner of a team. Answered
+                                                ; with LOGGED_OUT, and the user's other sessions end.
+%define MSG_DELETE_TEAM     43                  ; u32 team, str its key. Owners only.
+%define MSG_TRANSFER_OWNER  44                  ; u32 team, u32 member. Owners only: they become an owner and
+                                                ; the sender a member.
 ; Kicking, banning, timing out, nicknaming others and giving roles only work
 ; on someone below you. Owners are above everyone, other owners too, and
 ; everyone else ranks as their highest role.
@@ -137,6 +146,8 @@
 %define MSG_ROLES           151                 ; u32 team, u32 @everyone's perms, u8 n,
                                                 ; n * (u8 slot, u8 position, u32 color, u32 perms, str name)
 %define MSG_AUTOMOD         152                 ; u32 team, u32 timeout seconds, str16 words
+%define MSG_ACCOUNT         153                 ; u32 joined (0 if before it was kept), u8 n, n * session,
+                                                ; u8 m, m * (u32 team, u8 members, u16 open issues)
 ; BANS goes to PERM_BAN, AUDIT to PERM_VIEW_AUDIT and AUTOMOD to PERM_MANAGE_AUTOMOD,
 ; viewing the team, on SUBSCRIBE and after every change to them.
 
@@ -148,6 +159,7 @@
 ; A message: u32 id, u32 from, u32 to (a peer, as in OPEN_CHAT), u32 created, str16 text, u8 edited, image
 ; An image: u32 id, u16 width, u16 height, all 0 for none
 ; An override: CH_* allowed in the low nibble, denied in the high one
+; A session: u32 its number, u32 signed in, u32 last connected (0 if before it was kept), u8 SS_*
 ; An audit entry: u8 kind, u32 actor, u32 target, u32 when, u32 extra, str actor's name, str target's name, str reason
 ; Times are unix seconds.
 
@@ -258,3 +270,8 @@
 %define AU_CHANNEL          15                  ; target 0, extra = slot, settings changed
 %define AU_AUTOMOD          16                  ; target 0, rules changed
 %define AU_AUTOMOD_BLOCK    17                  ; actor = whoever posted, extra = the channel's slot, reason = the word
+%define AU_TRANSFER         18                  ; the target became an owner and the actor a member
+
+; A session's flags in MSG_ACCOUNT
+%define SS_CURRENT          1                   ; the one asking
+%define SS_ONLINE           2                   ; connected right now

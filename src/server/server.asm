@@ -54,6 +54,8 @@ global _start
 %include "roles.asm"
 %include "nicknames.asm"
 %include "automod.asm"
+%include "sessions.asm"
+%include "teardown.asm"
 
 _start:
     call ignore_sigpipe
