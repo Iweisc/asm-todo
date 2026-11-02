@@ -167,7 +167,8 @@ listen_on:
     call exit
 
 ; Password hashing runs between events in slices, so while any is waiting
-; epoll only polls instead of sleeping.
+; epoll only polls instead of sleeping. Each turn's changes share one
+; fdatasync, and the replies to them wait for it.
 event_loop:
     mov r10d, IDLE_WAIT_MS
     xor eax, eax
@@ -206,8 +207,9 @@ event_loop:
     jmp .event
 .events_done:
     cmp dword [jobs_pending], 0
-    je .reap
+    je .send
     call run_jobs
-.reap:
+.send:
+    call conn_send_held
     call conn_reap
     jmp event_loop

@@ -19,6 +19,11 @@ build/crypto-test: tests/crypto_test.asm $(COMMON)
 	$(NASM) tests/crypto_test.asm -o build/crypto-test.o
 	$(LD) build/crypto-test.o -o $@
 
+build/server-test: tests/server_test.asm src/server/*.asm $(COMMON)
+	@mkdir -p build
+	$(NASM) tests/server_test.asm -o build/server-test.o
+	$(LD) build/server-test.o -o $@
+
 build/ui-test: tests/ui_test.asm tests/ui_messages.asm tests/ui_controls.asm tests/ui_mentions.asm tests/ui_moderation.asm tests/ui_roles.asm tests/ui_account.asm src/client/*.asm $(COMMON)
 	@mkdir -p build
 	$(NASM) tests/ui_test.asm -o build/ui-test.o
@@ -38,8 +43,9 @@ build/font-preview: tests/font_preview.asm src/client/font.asm src/client/draw.a
 preview: build/font-preview
 	./build/font-preview > build/preview.ppm
 
-test: build/crypto-test build/ui-test build/png-test
+test: build/crypto-test build/server-test build/ui-test build/png-test
 	./build/crypto-test
+	./build/server-test
 	./build/ui-test
 	./build/png-test
 
