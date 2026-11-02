@@ -33,6 +33,7 @@ global _start
 %include "text.asm"
 %include "shapes.asm"
 %include "icons.asm"
+%include "glyphs.asm"
 %include "wayland.asm"
 %include "net.asm"
 %include "sync.asm"
@@ -41,8 +42,27 @@ global _start
 %include "widgets.asm"
 %include "menu.asm"
 %include "views.asm"
+%include "chips.asm"
 %include "sidebar.asm"
 %include "chat.asm"
+%include "comments.asm"
+%include "labels.asm"
+%include "account.asm"
+%include "dialogs.asm"
+%include "keymap.asm"
+%include "members.asm"
+%include "channel.asm"
+%include "chatedit.asm"
+%include "undo.asm"
+%include "edit.asm"
+%include "clipboard.asm"
+%include "session.asm"
+%include "localtime.asm"
+%include "inflate.asm"
+%include "png.asm"
+%include "thumbs.asm"
+%include "attach.asm"
+%include "pick.asm"
 
 section .rodata
 t_server:       db "127.0.0.1:18080", 0
@@ -73,6 +93,89 @@ n_delete_back:  db "another click backs out of deleting", 0
 n_caret:        db "a click puts the caret where it lands", 0
 n_sidebar:      db "the wheel scrolls the sidebar", 0
 n_clip_hit:     db "rows scrolled out of view can't be clicked", 0
+n_tz:           db "dates use the zone's offset in effect, before and after transitions", 0
+n_cmt_edited:   db "an edited comment's event replaces it in place", 0
+n_cmt_deleted:  db "a deleted comment's event removes it, keeping the order", 0
+n_cmt_open:     db "hovering your comment offers Edit, which opens it in a box", 0
+n_cmt_saved:    db "a saved edit shows right away, marked edited", 0
+n_cmt_delete:   db "deleting a comment asks first, then hides it", 0
+n_filter_hide:  db "priority and assignee filters hide issues that don't match", 0
+n_filter_chip:  db "a filter's chip removes only that filter", 0
+n_rename:       db "renaming a label shows the new name right away", 0
+n_remove_named: db "deleting a label asks first, then drops it and its filter", 0
+n_password_esc: db "closing the password dialog wipes both fields", 0
+n_rename_gone:  db "a label deleted while being renamed isn't brought back", 0
+n_logout_modal: db "being logged out closes the open dialog and wipes its passwords", 0
+n_keymap:       db "keys type, and shortcuts follow, what the compositor's keymap says", 0
+n_settings:     db "team settings show an owner every member's actions, and Remove asks first", 0
+n_member_view:  db "a member's team settings only offer leaving", 0
+n_dm_rows:      db "direct messages list everyone but you", 0
+n_chan_row:     db "a channel gets a sidebar row and, for its maker, an edit link", 0
+n_chan_members: db "a member list update keeps an open channel open", 0
+n_chan_gone:    db "a deleted channel's conversation closes", 0
+n_msg_edited:   db "an edited message shows its new text and its mark", 0
+n_msg_deleted:  db "a deleted message leaves the conversation", 0
+n_msg_edit:     db "hovering your message offers Edit, which opens it in place", 0
+n_undo:         db "undo takes back a word at a time, and redo puts it back", 0
+n_undo_reset:   db "a field given new text can't undo back into the old one", 0
+n_chan_switch:  db "switching teams closes the channel dialog", 0
+n_msg_image:    db "a message's image opens over the conversation, and Esc closes just it", 0
+n_image_gone:   db "the server saying an image is gone ends a download partway in", 0
+n_auth_wait:    db "logging in mid-reconnect waits for the connection, and says so if it fails", 0
+
+; A zone file: +1h, then -2h from t = 1000, then +1h again from t = 2000.
+t_zone:         db "TZif", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+                db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+                db 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 4
+                db 0, 0, 0x03, 0xe8, 0, 0, 0x07, 0xd0
+                db 1, 0
+                db 0, 0, 0x0e, 0x10, 0, 0
+                db 0xff, 0xff, 0xe3, 0xe0, 1, 0
+                db "AB", 0, 0
+t_zone_len      equ $ - t_zone
+
+; EV_COMMENT_EDITED for comment 12, and EV_COMMENT_DELETED for 11, past the kind byte.
+t_edited_event: dd ISSUE_ID, 12, 1, 0
+                dw 1
+                db "B", 1
+                dd 0                    ; no image
+                dw 0, 0
+t_edited_event_len equ $ - t_edited_event
+t_deleted_event: dd ISSUE_ID, 11
+t_deleted_event_len equ $ - t_deleted_event
+t_x:            db "x", 0
+t_hi_yo_keys:   db 35, 23, 57, 21, 24, 0  ; "hi yo" on a US keyboard
+; MSG_CHAT_EDITED for message 22, with image 77, and MSG_CHAT_DELETED for 21, past the type byte.
+t_chat_edited:  dd 1, 22, 1, 0, 0
+                dw 1
+                db "Z", 1
+                dd 77
+                dw 640, 480
+t_chat_edited_len equ $ - t_chat_edited
+t_chat_deleted: dd 1, 21
+t_chat_deleted_len equ $ - t_chat_deleted
+; MSG_IMAGE saying image 77 can't be sent: no bytes, at offset 0, past the type byte.
+t_image_gone:   dd 77, 0, 0
+                dw 0
+t_image_gone_len equ $ - t_image_gone
+t_maya:         db "maya"
+t_design:       db "design"
+; A French keymap, cut down to four keys, in the shapes xkbcommon and
+; Hyprland write.
+t_keymap:       db 'xkb_keycodes "evdev" {', 10
+                db 9, '<AE01>               = 10;', 10
+                db 9, '<AD01>               = 24;', 10
+                db 9, '<AC01> = 38;', 10
+                db 9, '<AB01> = 52;', 10
+                db 9, 'alias <LatQ>         = <AC01>;', 10
+                db '};', 10, 'xkb_symbols "pc_fr" {', 10
+                db 9, 'name[Group1]="French";', 10
+                db 9, 'key <AE01>               {', 9, '[       ampersand,               1 ] };', 10
+                db 9, 'key <AD01>               {', 9, '[               a,               A,              ae,              AE ] };', 10
+                db 9, 'key <AC01> { type= "ALPHABETIC", symbols[Group1]= [ q, Q ] };', 10
+                db 9, 'key <AB01> {', 9, '[ 0x77, 0x57, 0x7c5, 0x6c2 ] };', 10
+                db '};', 10
+t_keymap_len    equ $ - t_keymap
 
 s_ok:           db "ok    ", 0
 s_fail:         db "FAIL  ", 0
@@ -103,7 +206,20 @@ _start:
     call menu_tests
     call panel_tests
     call detail_tests
+    call comment_tests
+    call filter_tests
+    call labels_tests
+    call password_tests
+    call settings_tests
+    call channel_tests
+    call message_tests
+    call undo_tests
     call input_tests
+    call logout_tests
+    call auth_tests
+    call tz_tests
+    call keymap_tests
+    call controls_tests
     xor edi, edi
     cmp dword [failures], 0
     setne dil
@@ -526,6 +642,287 @@ detail_tests:
     add rsp, 8
     ret
 
+; edi = action, esi = arg. Moves the pointer onto their region and redraws.
+hover_hit:
+    sub rsp, 8
+    call find_hit
+    test rax, rax
+    jz .done
+    call point_at_hit
+    call update_hover
+    call frame
+.done:
+    add rsp, 8
+    ret
+
+; Comments 11, 12 and 13 on the open issue: their events, then editing and
+; deleting one by hand.
+comment_tests:
+    push rbx
+    mov edi, ISSUE_ID
+    call sync_open_issue
+    mov byte [detail_loaded], 1
+    xor ebx, ebx
+.add:
+    imul eax, ebx, CC_SIZE
+    lea rdi, [comments + rax]
+    lea ecx, [ebx + 11]
+    mov [rdi + CC_ID], ecx
+    mov dword [rdi + CC_AUTHOR], 1
+    mov word [rdi + CC_LEN], 1
+    lea ecx, [ebx + 'a']
+    mov [rdi + CC_TEXT], cl
+    inc ebx
+    cmp ebx, 3
+    jb .add
+    mov dword [comment_count], 3
+
+    lea rdi, [t_edited_event]
+    mov esi, t_edited_event_len
+    call rd_begin
+    mov edi, EV_COMMENT_EDITED
+    call on_comment_event
+    call rd_ok
+    xor esi, esi
+    test eax, eax
+    jz .edited
+    cmp dword [comment_count], 3
+    jne .edited
+    cmp byte [comments + CC_SIZE + CC_TEXT], 'B'
+    jne .edited
+    cmp byte [comments + CC_SIZE + CC_EDITED], 1
+    sete sil
+.edited:
+    lea rdi, [n_cmt_edited]
+    call check
+
+    lea rdi, [t_deleted_event]
+    mov esi, t_deleted_event_len
+    call rd_begin
+    mov edi, EV_COMMENT_DELETED
+    call on_comment_event
+    call rd_ok
+    xor esi, esi
+    test eax, eax
+    jz .deleted
+    cmp dword [comment_count], 2
+    jne .deleted
+    cmp dword [comments + CC_ID], 12
+    jne .deleted
+    cmp dword [comments + CC_SIZE + CC_ID], 13
+    sete sil
+.deleted:
+    lea rdi, [n_cmt_deleted]
+    call check
+
+    call rebuild_view
+    call frame
+    mov edi, A_COMMENT
+    mov esi, 13
+    call hover_hit
+    mov edi, A_EDIT_COMMENT
+    mov esi, 13
+    call click_hit
+    xor esi, esi
+    test eax, eax
+    jz .open
+    cmp dword [editing_comment], 13
+    jne .open
+    cmp dword [focus], F_EDIT
+    sete sil
+.open:
+    lea rdi, [n_cmt_open]
+    call check
+
+    mov edi, F_EDIT
+    lea rsi, [t_x]
+    call type_into
+    mov edi, KEY_ENTER
+    call field_command
+    xor esi, esi
+    cmp dword [pending_count], 1
+    jne .saved
+    cmp dword [editing_comment], 0
+    jne .saved
+    cmp word [view_comments + CC_SIZE + CC_LEN], 2
+    jne .saved
+    cmp word [view_comments + CC_SIZE + CC_TEXT], 'cx'
+    jne .saved
+    cmp byte [view_comments + CC_SIZE + CC_EDITED], 1
+    sete sil
+.saved:
+    lea rdi, [n_cmt_saved]
+    call check
+
+    call frame
+    mov edi, A_COMMENT
+    mov esi, 12
+    call hover_hit
+    mov edi, A_DELETE_COMMENT
+    mov esi, 12
+    call click_hit
+    xor esi, esi
+    cmp dword [view_comment_count], 2
+    jne .delete
+    mov edi, A_DELETE_COMMENT
+    mov esi, 12
+    call click_hit
+    cmp dword [view_comment_count], 1
+    sete sil
+.delete:
+    lea rdi, [n_cmt_delete]
+    call check
+    mov dword [pending_count], 0
+    call close_detail
+    pop rbx
+    ret
+
+; The test issue has no priority and nobody assigned.
+filter_tests:
+    push rbx
+    xor ebx, ebx
+    mov dword [filter_priority], PRIO_URGENT
+    lea rdi, [view_issues]
+    call issue_shown
+    test eax, eax
+    jnz .hide
+    mov dword [filter_priority], PRIO_NONE
+    mov dword [filter_assignee], 1
+    lea rdi, [view_issues]
+    call issue_shown
+    test eax, eax
+    jnz .hide
+    mov dword [filter_assignee], 0
+    lea rdi, [view_issues]
+    call issue_shown
+    mov ebx, eax
+.hide:
+    mov esi, ebx
+    lea rdi, [n_filter_hide]
+    call check
+
+    mov byte [list_dirty], 1
+    call frame
+    mov edi, A_UNFILTER
+    mov esi, 3
+    call click_hit
+    xor esi, esi
+    cmp dword [filter_assignee], -1
+    jne .chip
+    cmp dword [filter_priority], PRIO_NONE
+    sete sil
+.chip:
+    lea rdi, [n_filter_chip]
+    call check
+    call clear_filters
+    pop rbx
+    ret
+
+; The labels and projects dialog, with one label, "bug".
+labels_tests:
+    sub rsp, 8
+    mov byte [labels + LB_NAME_LEN], 3
+    mov dword [labels + LB_NAME], 'bug'
+    call rebuild_view
+    call open_labels_modal
+    call frame
+    mov edi, A_RENAME
+    xor esi, esi
+    call click_hit
+    mov edi, F_RENAME
+    lea rsi, [t_x]
+    call type_into
+    mov edi, KEY_ENTER
+    call field_command
+    xor esi, esi
+    cmp dword [renaming], 0
+    jne .renamed
+    cmp byte [view_labels + LB_NAME_LEN], 4
+    jne .renamed
+    cmp dword [view_labels + LB_NAME], 'bugx'
+    sete sil
+.renamed:
+    lea rdi, [n_rename]
+    call check
+
+    mov dword [filter_label], 0
+    call frame
+    mov edi, A_REMOVE_NAMED
+    xor esi, esi
+    call click_hit
+    xor esi, esi
+    cmp byte [view_labels + LB_NAME_LEN], 4
+    jne .removed
+    mov edi, A_REMOVE_NAMED
+    xor esi, esi
+    call click_hit
+    cmp dword [filter_label], -1
+    jne .removed
+    cmp byte [view_labels + LB_NAME_LEN], 0
+    sete sil
+.removed:
+    lea rdi, [n_remove_named]
+    call check
+    mov dword [pending_count], 0
+
+    ; Someone else deletes it while we're typing its new name.
+    mov byte [labels + LB_NAME_LEN], 3
+    call rebuild_view
+    xor edi, edi
+    call start_rename
+    mov byte [labels + LB_NAME_LEN], 0
+    call rebuild_view
+    mov edi, F_RENAME
+    lea rsi, [t_x]
+    call type_into
+    mov edi, KEY_ENTER
+    call field_command
+    xor esi, esi
+    cmp dword [pending_count], 0
+    sete sil
+    lea rdi, [n_rename_gone]
+    call check
+    mov byte [modal], M_NONE
+    call rebuild_view
+    add rsp, 8
+    ret
+
+; The change password dialog keeps nothing once it's gone.
+password_tests:
+    push rbx
+    call open_password_modal
+    mov edi, F_OLD_PASS
+    lea rsi, [t_hello]
+    call type_into
+    mov edi, KEY_TAB
+    call field_command
+    mov edi, F_NEW_PASS
+    lea rsi, [t_draft]
+    call type_into
+    mov edi, KEY_ESC
+    call field_command
+    xor ebx, ebx
+    cmp byte [modal], M_NONE
+    jne .done
+    mov edi, F_OLD_PASS
+    call field_len
+    test eax, eax
+    jnz .done
+    mov edi, F_NEW_PASS
+    call field_len
+    test eax, eax
+    jnz .done
+    cmp byte [old_pass_buf], 0
+    jne .done
+    cmp byte [new_pass_buf], 0
+    sete bl
+.done:
+    mov esi, ebx
+    lea rdi, [n_password_esc]
+    call check
+    pop rbx
+    ret
+
 ; Keys, a conversation, and hit regions under a clip.
 input_tests:
     push rbx
@@ -596,3 +993,508 @@ input_tests:
     call reset_clip
     pop rbx
     ret
+
+; tz_parse picks the offset of the last transition at or before the time.
+; edi = the time -> eax = the offset it finds
+zone_at:
+    push rdi
+    lea rdi, [tz_file]
+    lea rsi, [t_zone]
+    mov ecx, t_zone_len
+    rep movsb
+    pop rdx
+    mov esi, t_zone_len
+    jmp tz_parse
+
+; The server logs us out with the change password dialog half filled in.
+; Leaves the client logged out.
+logout_tests:
+    push rbx
+    call open_password_modal
+    mov edi, F_OLD_PASS
+    lea rsi, [t_hello]
+    call type_into
+    call sync_reset
+    xor ebx, ebx
+    cmp byte [modal], M_NONE
+    jne .done
+    cmp dword [focus], F_USER
+    jne .done
+    cmp byte [old_pass_buf], 0
+    sete bl
+.done:
+    mov esi, ebx
+    lea rdi, [n_logout_modal]
+    call check
+    pop rbx
+    ret
+
+; Runs last: it swaps the layout for the rest of the run.
+keymap_tests:
+    sub rsp, 8
+    lea rsi, [t_keymap]
+    mov edx, t_keymap_len
+    call keymap_parse
+    xor esi, esi
+    cmp byte [keymap_plain + 16], 'a'       ; evdev codes, 8 under XKB's
+    jne .done
+    cmp byte [keymap_shift + 16], 'A'
+    jne .done
+    cmp byte [keymap_plain + 30], 'q'
+    jne .done
+    cmp byte [keymap_plain + 2], '&'
+    jne .done
+    cmp byte [keymap_shift + 2], '1'
+    jne .done
+    cmp byte [keymap_shift + 44], 'W'
+    jne .done
+    cmp byte [keymap_plain + 17], 0         ; a key the keymap doesn't have
+    jne .done
+    mov edi, 16                             ; types 'a' here, so it's Ctrl+A
+    call shortcut_key
+    cmp eax, KEY_A
+    sete sil
+.done:
+    lea rdi, [n_keymap]
+    call check
+    add rsp, 8
+    ret
+
+; A second member, maya, for the tests that need someone else on the team.
+add_maya:
+    mov dword [member_count], 2
+    mov dword [members + CM_SIZE + CM_ID], 2
+    mov byte [members + CM_SIZE + CM_ROLE], ROLE_MEMBER
+    mov byte [members + CM_SIZE + CM_NAME_LEN], 4
+    mov eax, [t_maya]
+    mov [members + CM_SIZE + CM_NAME], eax
+    ret
+
+; Team settings and the direct messages under the channels.
+settings_tests:
+    push rbx
+    call add_maya
+    mov edi, F_NONE
+    call open_team_settings
+    call frame
+    xor ebx, ebx
+    mov edi, A_SET_ROLE
+    mov esi, 2
+    call find_hit
+    test rax, rax
+    jz .owner
+    mov edi, A_LEAVE
+    mov esi, 1
+    call find_hit
+    test rax, rax
+    jz .owner
+    mov edi, A_REMOVE
+    mov esi, 2
+    call click_hit
+    cmp dword [member_armed], 2             ; asks rather than removes
+    jne .owner
+    mov edi, A_FIELD
+    mov esi, F_MEMBER
+    call click_hit
+    cmp dword [member_armed], 0
+    sete bl
+.owner:
+    mov esi, ebx
+    lea rdi, [n_settings]
+    call check
+
+    xor ebx, ebx
+    mov byte [teams + CO_ROLE], ROLE_MEMBER
+    call frame
+    mov edi, A_REMOVE
+    mov esi, 2
+    call find_hit
+    test rax, rax
+    jnz .member
+    mov edi, A_SET_ROLE
+    mov esi, 2
+    call find_hit
+    test rax, rax
+    jnz .member
+    mov edi, A_LEAVE
+    mov esi, 1
+    call find_hit
+    test rax, rax
+    setnz bl
+.member:
+    mov esi, ebx
+    lea rdi, [n_member_view]
+    call check
+    mov byte [teams + CO_ROLE], ROLE_OWNER
+
+    call close_modal
+    call frame
+    xor ebx, ebx
+    mov edi, A_CHAT
+    mov esi, 1
+    call find_hit
+    test rax, rax
+    jnz .rows
+    mov edi, A_CHAT
+    mov esi, 2
+    call find_hit
+    test rax, rax
+    setnz bl
+.rows:
+    mov esi, ebx
+    lea rdi, [n_dm_rows]
+    call check
+    mov dword [member_count], 1
+    pop rbx
+    ret
+
+; A channel besides #general, from the sidebar to its deletion.
+channel_tests:
+    push rbx
+    call add_maya
+    mov dword [chan_count], 1
+    mov byte [chans + CN_SLOT], 1
+    mov dword [chans + CN_CREATOR], 1
+    mov byte [chans + CN_NAME_LEN], 6
+    lea rdi, [chans + CN_NAME]
+    lea rsi, [t_design]
+    mov edx, 6
+    call put_mem
+    call frame
+    xor ebx, ebx
+    mov edi, A_CHAT
+    mov esi, CHANNEL_PEER + 1
+    call click_hit
+    test eax, eax
+    jz .row
+    cmp dword [chat_peer], CHANNEL_PEER + 1
+    jne .row
+    mov edi, A_CHANNEL_DIALOG
+    mov esi, 1
+    call find_hit
+    test rax, rax
+    setnz bl
+.row:
+    mov esi, ebx
+    lea rdi, [n_chan_row]
+    call check
+
+    call ui_members_changed
+    movzx esi, byte [chat_open]
+    lea rdi, [n_chan_members]
+    call check
+
+    mov dword [chan_count], 0
+    call channels_changed
+    xor esi, esi
+    cmp byte [chat_open], 0
+    sete sil
+    lea rdi, [n_chan_gone]
+    call check
+
+    mov dword [chan_count], 1
+    mov edi, 1
+    call open_channel_dialog
+    call ui_team_opened
+    xor esi, esi
+    cmp byte [modal], M_NONE
+    sete sil
+    lea rdi, [n_chan_switch]
+    call check
+    mov dword [chan_count], 0
+    mov dword [member_count], 1
+    mov byte [modal], M_NONE
+    mov dword [focus], F_NONE
+    call frame
+    pop rbx
+    ret
+
+; Editing and deleting messages in #general.
+message_tests:
+    push rbx
+    xor edi, edi
+    call open_chat
+    mov byte [chat_loaded], 1
+    xor ebx, ebx
+.add:
+    imul eax, ebx, CH_SIZE
+    lea rdi, [chat_msgs + rax]
+    lea ecx, [ebx + 21]
+    mov [rdi + CH_ID], ecx
+    mov dword [rdi + CH_AUTHOR], 1
+    mov word [rdi + CH_LEN], 1
+    lea ecx, [ebx + 'a']
+    mov [rdi + CH_TEXT], cl
+    inc ebx
+    cmp ebx, 3
+    jb .add
+    mov dword [chat_count], 3
+    call rebuild_chat
+
+    lea rdi, [t_chat_edited]
+    mov esi, t_chat_edited_len
+    call rd_begin
+    call on_chat_edited
+    call rd_ok
+    xor esi, esi
+    test eax, eax
+    jz .edited
+    cmp byte [view_chat + CH_SIZE + CH_TEXT], 'Z'
+    jne .edited
+    cmp byte [view_chat + CH_SIZE + CH_EDITED], 1
+    sete sil
+.edited:
+    lea rdi, [n_msg_edited]
+    call check
+
+    lea rdi, [t_chat_deleted]
+    mov esi, t_chat_deleted_len
+    call rd_begin
+    call on_chat_deleted
+    call rd_ok
+    xor esi, esi
+    test eax, eax
+    jz .deleted
+    cmp dword [view_chat_count], 2
+    jne .deleted
+    cmp dword [view_chat + CH_ID], 22
+    jne .deleted
+    cmp dword [view_chat + CH_SIZE + CH_ID], 23
+    sete sil
+.deleted:
+    lea rdi, [n_msg_deleted]
+    call check
+
+    call frame
+    xor ebx, ebx
+    mov edi, A_MESSAGE
+    mov esi, 22
+    call find_hit
+    test rax, rax
+    jz .edit
+    call point_at_hit
+    call frame                              ; hover follows the frame before
+    call frame
+    mov edi, A_EDIT_MESSAGE
+    mov esi, 22
+    call click_hit
+    test eax, eax
+    jz .edit
+    cmp dword [editing_message], 22
+    jne .edit
+    cmp dword [focus], F_EDIT
+    jne .edit
+    mov edi, KEY_ESC
+    call field_command
+    cmp dword [editing_message], 0
+    sete bl
+.edit:
+    mov esi, ebx
+    lea rdi, [n_msg_edit]
+    call check
+
+    call frame
+    xor ebx, ebx
+    mov edi, A_IMAGE
+    mov esi, 77
+    call click_hit
+    test eax, eax
+    jz .image
+    cmp byte [modal], M_IMAGE
+    jne .image
+    cmp dword [view_id], 77
+    jne .image
+    mov edi, KEY_ESC
+    call ui_key
+    cmp byte [modal], M_NONE
+    jne .image
+    movzx ebx, byte [chat_open]
+.image:
+    mov esi, ebx
+    lea rdi, [n_msg_image]
+    call check
+
+    mov dword [dl_id], 77
+    mov dword [dl_got], IMAGE_PART
+    lea rdi, [t_image_gone]
+    mov esi, t_image_gone_len
+    call rd_begin
+    call on_image
+    xor esi, esi
+    cmp dword [dl_id], 0
+    sete sil
+    lea rdi, [n_image_gone]
+    call check
+    call close_detail
+    mov dword [chat_count], 0
+    call rebuild_chat
+    pop rbx
+    ret
+
+; edi = field, esi = expected length, edx = its first byte -> eax = 1 if it matches
+field_is:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov ebx, esi
+    mov r12d, edx
+    call field_addr
+    xor ecx, ecx
+    cmp [rax + FD_LEN], ebx
+    jne .done
+    test ebx, ebx
+    jz .yes
+    mov rax, [rax + FD_BUF]
+    movzx edx, byte [rax]
+    cmp edx, r12d
+    jne .done
+.yes:
+    mov ecx, 1
+.done:
+    mov eax, ecx
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
+; edi = key code, pressed with Ctrl and whatever's in esi, in the comment box
+ctrl_key:
+    sub rsp, 8
+    or esi, MOD_CTRL
+    mov [modifiers], esi
+    mov esi, edi
+    mov edi, F_COMMENT
+    call field_key
+    mov dword [modifiers], 0
+    add rsp, 8
+    ret
+
+; Types "hi yo" key by key, undoes it a word at a time, then redoes it with both shortcuts.
+undo_tests:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov edi, F_COMMENT
+    call field_clear
+    lea r12, [t_hi_yo_keys]
+.key:
+    movzx esi, byte [r12]
+    test esi, esi
+    jz .typed
+    mov edi, F_COMMENT
+    call field_key
+    inc r12
+    jmp .key
+.typed:
+    xor ebx, ebx
+    mov edi, KEY_Z
+    xor esi, esi
+    call ctrl_key
+    mov edi, F_COMMENT
+    mov esi, 2                              ; "hi"
+    mov edx, 'h'
+    call field_is
+    test eax, eax
+    jz .done
+    mov edi, KEY_Z
+    xor esi, esi
+    call ctrl_key
+    mov edi, F_COMMENT
+    xor esi, esi
+    xor edx, edx
+    call field_is
+    test eax, eax
+    jz .done
+    mov edi, KEY_Y
+    xor esi, esi
+    call ctrl_key
+    mov edi, KEY_Z
+    mov esi, MOD_SHIFT
+    call ctrl_key
+    mov edi, F_COMMENT
+    mov esi, 5                              ; "hi yo"
+    mov edx, 'h'
+    call field_is
+    mov ebx, eax
+.done:
+    mov esi, ebx
+    lea rdi, [n_undo]
+    call check
+    mov edi, F_COMMENT
+    call field_clear
+    mov edi, KEY_Z
+    xor esi, esi
+    call ctrl_key
+    mov edi, F_COMMENT
+    xor esi, esi
+    xor edx, edx
+    call field_is
+    mov esi, eax
+    lea rdi, [n_undo_reset]
+    call check
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
+; The login screen's connection gets dropped for idling, so a login can
+; land while it's coming back.
+auth_tests:
+    push rbx
+    xor ebx, ebx
+    mov byte [auth_busy], 0
+    mov edi, F_USER
+    lea rsi, [t_x]
+    mov edx, 1
+    call field_set
+    mov edi, F_PASS
+    lea rsi, [t_x]
+    mov edx, 1
+    call field_set
+    mov byte [net_state], NET_CONNECTING
+    mov edi, MSG_LOGIN
+    call do_auth
+    cmp byte [auth_queued], MSG_LOGIN
+    jne .done
+    cmp dword [auth_msg_len], 0
+    jne .done
+    call sync_on_offline
+    cmp byte [auth_queued], 0
+    jne .done
+    cmp dword [auth_msg_len], 0
+    setne bl
+.done:
+    mov byte [net_state], NET_OFF
+    mov edi, F_USER
+    call field_clear
+    mov edi, F_PASS
+    call field_clear
+    mov esi, ebx
+    lea rdi, [n_auth_wait]
+    call check
+    pop rbx
+    ret
+
+; The local time zone, from a zone file.
+tz_tests:
+    push rbx
+    xor ebx, ebx
+    mov edi, 500
+    call zone_at
+    cmp eax, 3600
+    jne .done
+    mov edi, 1500
+    call zone_at
+    cmp eax, -7200
+    jne .done
+    mov edi, 2500
+    call zone_at
+    cmp eax, 3600
+    sete bl
+.done:
+    mov esi, ebx
+    lea rdi, [n_tz]
+    call check
+    pop rbx
+    ret
+%include "tests/ui_controls.asm"

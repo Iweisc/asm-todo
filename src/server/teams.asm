@@ -10,7 +10,7 @@ text e_no_user,         "there's no user with that name"
 text e_already_member,  "they're already a member"
 text e_not_their_team,  "they're not a member of that team"
 text e_team_full,       "that team is full"
-text e_owner_leave,     "owners can't leave their own team"
+text e_last_owner,      "a team needs an owner. Make someone else an owner first"
 
 ; Every new team starts with these labels: color, name.
 default_labels:
@@ -528,6 +528,31 @@ h_add_member:
     pop rbx
     ret
 
+; Whoever was removed stops seeing the team immediately. edi = team, esi = user
+unsubscribe_user:
+    push rbx
+    push r12
+    push r13
+    mov r12d, edi
+    mov r13d, esi
+    xor ebx, ebx
+.conn:
+    mov edi, ebx
+    call conn_addr
+    cmp [rax + C_USER], r13d
+    jne .next
+    cmp [rax + C_TEAM], r12d
+    jne .next
+    mov dword [rax + C_TEAM], 0
+.next:
+    inc ebx
+    cmp ebx, MAX_CONN
+    jb .conn
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
 ; Removing someone (or leaving) also unassigns them from the team's issues,
 ; one EV_ISSUE each so everyone's view stays in step.
 h_remove_member:
@@ -561,7 +586,15 @@ h_remove_member:
     cmp r13d, r14d
     jne .removing_someone
     cmp ebx, ROLE_OWNER                     ; leaving
-    je .owner_leave
+    jne .remove
+    push rax
+    push rax
+    mov edi, r12d
+    call count_owners
+    cmp eax, 1
+    pop rax
+    pop rax
+    jbe .last_owner
     jmp .remove
 .removing_someone:
     cmp ebx, ROLE_OWNER
@@ -610,20 +643,9 @@ h_remove_member:
     call db_touch
     call db_commit
 
-    ; Whoever was removed stops seeing the team immediately.
-    xor ebx, ebx
-.unsubscribe:
-    mov edi, ebx
-    call conn_addr
-    cmp [rax + C_USER], r13d
-    jne .next_conn
-    cmp [rax + C_TEAM], r12d
-    jne .next_conn
-    mov dword [rax + C_TEAM], 0
-.next_conn:
-    inc ebx
-    cmp ebx, MAX_CONN
-    jb .unsubscribe
+    mov edi, r12d
+    mov esi, r13d
+    call unsubscribe_user
 
     xor ebx, ebx
 .event:
@@ -657,9 +679,9 @@ h_remove_member:
     lea rsi, [e_not_their_team]
     mov edx, e_not_their_team_len
     jmp .error
-.owner_leave:
-    lea rsi, [e_owner_leave]
-    mov edx, e_owner_leave_len
+.last_owner:
+    lea rsi, [e_last_owner]
+    mov edx, e_last_owner_len
     jmp .error
 .owner_only:
     lea rsi, [e_owner_only]
@@ -673,5 +695,173 @@ h_remove_member:
     pop r13
     pop r12
     pop rbp
+    pop rbx
+    ret
+
+; edi = team -> eax = how many owners it has
+count_owners:
+    lea rcx, [members]
+    mov edx, [n_members]
+    xor eax, eax
+.row:
+    test edx, edx
+    jz .done
+    cmp [rcx + MEM_TEAM], edi
+    jne .next
+    cmp dword [rcx + MEM_ROLE], ROLE_OWNER
+    jne .next
+    inc eax
+.next:
+    add rcx, MEM_SIZE
+    dec edx
+    jmp .row
+.done:
+    ret
+
+; Every member of a team gets their fresh team list. edi = team
+send_teams_to_members:
+    push rbx
+    push r12
+    push r13
+    mov r12d, edi
+    lea rbx, [members]
+    mov r13d, [n_members]
+.row:
+    test r13d, r13d
+    jz .done
+    cmp [rbx + MEM_TEAM], r12d
+    jne .next
+    mov edi, [rbx + MEM_USER]
+    call send_teams_to_user
+.next:
+    add rbx, MEM_SIZE
+    dec r13d
+    jmp .row
+.done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; MSG_SET_ROLE: an owner makes a member an owner, or an owner a member again.
+; The last owner can't stop being one.
+h_set_role:
+    push rbx
+    push r12
+    push r13
+    push r14
+    sub rsp, 8
+    call rd_u32
+    mov r12d, eax                           ; team
+    call rd_u32
+    mov r13d, eax                           ; user
+    call rd_u8
+    mov ebx, eax                            ; role
+    call rd_ok
+    test eax, eax
+    jz .violation
+    cmp ebx, ROLE_OWNER
+    je .valid
+    cmp ebx, ROLE_MEMBER
+    jne .violation
+.valid:
+    mov edi, r12d
+    call require_owner
+    test eax, eax
+    jz .done
+    mov edi, r12d
+    mov esi, r13d
+    call find_member
+    test rax, rax
+    jz .not_theirs
+    mov r14, rax
+    cmp [r14 + MEM_ROLE], ebx
+    je .done
+    cmp ebx, ROLE_MEMBER
+    jne .set
+    mov edi, r12d
+    call count_owners
+    cmp eax, 1
+    jbe .last_owner
+.set:
+    mov [r14 + MEM_ROLE], ebx
+    mov edi, T_MEMBERS
+    mov rsi, r14
+    call db_touch
+    call db_commit
+    mov edi, r13d
+    call send_teams_to_user
+    mov edi, r12d
+    call broadcast_members
+    jmp .done
+.violation:
+    call kill_cur
+    jmp .done
+.not_theirs:
+    lea rsi, [e_not_their_team]
+    mov edx, e_not_their_team_len
+    jmp .error
+.last_owner:
+    lea rsi, [e_last_owner]
+    mov edx, e_last_owner_len
+.error:
+    call send_error
+.done:
+    add rsp, 8
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; MSG_RENAME_TEAM: owners only. Every member's team list shows the new name.
+h_rename_team:
+    push rbx
+    push r12
+    push r13
+    call rd_u32
+    mov ebx, eax
+    call rd_str
+    mov r12, rax
+    mov r13d, edx
+    call rd_ok
+    test eax, eax
+    jz .violation
+    mov rsi, r12
+    mov edx, r13d
+    mov ecx, TEAMNAME_MAX
+    call valid_text
+    test eax, eax
+    jz .bad_name
+    mov edi, ebx
+    call require_owner
+    test eax, eax
+    jz .done
+    mov edi, ebx
+    call find_team
+    test rax, rax
+    jz .done
+    mov [rax + TEAM_NAME_LEN], r13b
+    lea rdi, [rax + TEAM_NAME]
+    mov rsi, r12
+    mov ecx, r13d
+    rep movsb
+    mov edi, T_TEAMS
+    mov rsi, rax
+    call db_touch
+    call db_commit
+    mov edi, ebx
+    call send_teams_to_members
+    jmp .done
+.violation:
+    call kill_cur
+    jmp .done
+.bad_name:
+    lea rsi, [e_team_name]
+    mov edx, e_team_name_len
+    call send_error
+.done:
+    pop r13
+    pop r12
     pop rbx
     ret

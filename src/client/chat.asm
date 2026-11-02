@@ -1,8 +1,9 @@
 ; The chat: opening a conversation, and drawing it with the box for the
-; next message. The sidebar rows that open one live in views.asm.
+; next message. The sidebar rows that open one live in sidebar.asm and
+; channel.asm, and editing messages in chatedit.asm.
 
 section .rodata
-text s_channel_intro,   "This is the start of the team's channel. Everyone in the team can read it."
+text s_channel_intro,   "This is the start of the channel. Everyone in the team can read it."
 text s_dm_intro,        "This is the start of your conversation with "
 
 section .bss
@@ -49,7 +50,7 @@ ui_members_changed:
     je .done
     mov edi, [chat_peer]
     test edi, edi
-    jz .done
+    jle .done                               ; a channel
     call find_member_row
     test rax, rax
     jz close_detail
@@ -113,7 +114,7 @@ lay_message:
     push r13
     push r14
     push r15
-    sub rsp, 8
+    sub rsp, 24
     mov rbx, rdi
     mov r12d, edx
     mov r13d, ecx
@@ -128,41 +129,42 @@ lay_message:
     mov eax, [rbx + CH_CREATED]
     sub eax, [rsi + CH_CREATED]
     cmp eax, CHAT_RUN
-    jbe .text
+    ja .gap
+    cmp byte [rbx + CH_EDITED], 0           ; its header is where "(edited)" goes
+    jne .header
+    jmp .text
 .gap:
     mov ebp, 14
 .header:
     test r15d, r15d
     jz .header_done
-    mov edi, [rbx + CH_AUTHOR]
-    call user_name
-    mov r8, rsi
-    mov edi, r12d
-    lea esi, [r13d + ebp + 2]
-    mov edx, CHAT_AVATAR
-    mov ecx, [rbx + CH_AUTHOR]
-    call draw_avatar
-    mov edi, [rbx + CH_AUTHOR]
-    call user_name
-    mov ecx, edx
-    mov rdx, rsi
-    lea edi, [r12d + CHAT_TEXT_X]
-    lea esi, [r13d + ebp + 14]
-    mov r8d, INK(C_TEXT, ST_MEDIUM)
-    call draw_text
-    mov [rsp], eax
-    lea rdi, [scratch]
-    mov esi, [rbx + CH_CREATED]
-    call put_ago
-    mov rcx, rdi
-    mov edi, [rsp]
-    add edi, 8
-    lea esi, [r13d + ebp + 14]
-    mov r8d, INK(C_FAINT, ST_SMALL)
-    call draw_scratch
+    mov rdi, rbx
+    mov esi, r12d
+    lea edx, [r13d + ebp]
+    call draw_message_head
 .header_done:
     add ebp, 20
 .text:
+    mov eax, [rbx + CH_ID]
+    test eax, eax
+    jz .plain
+    cmp eax, [editing_message]
+    jne .plain
+    lea edi, [r14d - CHAT_TEXT_X]
+    test r15d, r15d
+    jnz .editor
+    call edit_box_height
+    jmp .height
+.editor:
+    lea edi, [r12d + CHAT_TEXT_X]
+    lea esi, [r13d + ebp]
+    lea edx, [r14d - CHAT_TEXT_X]
+    call draw_comment_editor
+    jmp .height
+.plain:
+    xor eax, eax
+    cmp word [rbx + CH_LEN], 0
+    je .text_done                           ; just an image
     lea rdi, [rbx + CH_TEXT]
     movzx esi, word [rbx + CH_LEN]
     lea edx, [r14d - CHAT_TEXT_X]
@@ -170,7 +172,7 @@ lay_message:
     jnz .draw
     mov ecx, ST_BODY
     call text_height
-    jmp .height
+    jmp .text_done
 .draw:
     mov r8d, edx
     lea edx, [r12d + CHAT_TEXT_X]
@@ -180,14 +182,97 @@ lay_message:
     cmp byte [rbx + CH_PENDING], 0
     cmovne r9d, eax
     call draw_wrapped
+.text_done:
+    mov [rsp + 8], eax
+    lea rdi, [rbx + CH_IMAGE]
+    lea esi, [r14d - CHAT_TEXT_X]
+    call image_ref_height
+    add eax, [rsp + 8]
 .height:
     add eax, ebp
-    add rsp, 8
+    test r15d, r15d
+    jz .out
+    mov [rsp], eax
+    mov ecx, [rbx + CH_ID]
+    cmp ecx, [editing_message]
+    je .drawn                               ; the box takes the clicks
+    ; The whole message, so hovering anywhere on it shows its actions.
+    mov edi, r12d
+    mov esi, r13d
+    mov edx, r14d
+    mov r8d, A_MESSAGE
+    mov r9d, ecx
+    mov ecx, eax
+    call add_hit
+    lea edx, [ebp - 24]                     ; the strip sits on the header, or the first line
+    mov eax, -2
+    cmp edx, eax
+    cmovl edx, eax
+    add edx, r13d
+    mov rdi, rbx
+    lea esi, [r12d + r14d]
+    call draw_message_actions
+    ; The image last, so clicks on it open it rather than land on the message.
+    lea rdi, [rbx + CH_IMAGE]
+    lea esi, [r12d + CHAT_TEXT_X]
+    mov edx, [rsp + 8]
+    add edx, r13d
+    add edx, ebp
+    lea ecx, [r14d - CHAT_TEXT_X]
+    call draw_image_ref
+.drawn:
+    mov eax, [rsp]
+.out:
+    add rsp, 24
     pop r15
     pop r14
     pop r13
     pop r12
     pop rbp
+    pop rbx
+    ret
+
+; The first message of a run's avatar, name and time. rdi = the message, esi = x, edx = y
+draw_message_head:
+    push rbx
+    push r12
+    push r13
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    mov edi, [rbx + CH_AUTHOR]
+    call user_name
+    mov r8, rsi
+    mov edi, r12d
+    lea esi, [r13d + 2]
+    mov edx, CHAT_AVATAR
+    mov ecx, [rbx + CH_AUTHOR]
+    call draw_avatar
+    mov edi, [rbx + CH_AUTHOR]
+    call user_name
+    mov ecx, edx
+    mov rdx, rsi
+    lea edi, [r12d + CHAT_TEXT_X]
+    lea esi, [r13d + 14]
+    mov r8d, INK(C_TEXT, ST_MEDIUM)
+    call draw_text
+    mov r12d, eax                           ; where the name ends
+    lea rdi, [scratch]
+    mov esi, [rbx + CH_CREATED]
+    call put_ago
+    cmp byte [rbx + CH_EDITED], 0
+    je .when
+    lea rsi, [s_edited]
+    mov edx, s_edited_len
+    call put_mem
+.when:
+    mov rcx, rdi
+    lea edi, [r12d + 8]
+    lea esi, [r13d + 14]
+    mov r8d, INK(C_FAINT, ST_SMALL)
+    call draw_scratch
+    pop r13
+    pop r12
     pop rbx
     ret
 
@@ -209,7 +294,7 @@ draw_chat_intro:
     lea rsi, [s_channel_intro]
     mov edx, s_channel_intro_len
     cmp dword [chat_peer], 0
-    je .line
+    jle .line                               ; a channel
     lea rsi, [s_dm_intro]
     mov edx, s_dm_intro_len
     call put_mem
@@ -246,12 +331,19 @@ draw_composer:
     mov rdi, [rax + FD_BUF]
     mov esi, [rax + FD_LEN]
     mov edx, [rsp]
-    sub edx, 24
+    sub edx, 24 + BOX_BUTTONS_W
     mov ecx, ST_BODY
     call text_height
     lea ebp, [eax + 24]                     ; the box's height
     sub r12d, ebp
     sub r12d, 32                            ; and its top
+    mov edi, F_MESSAGE
+    call attachment_height
+    mov edi, F_MESSAGE
+    mov esi, ebx
+    mov edx, r12d
+    sub edx, eax
+    call draw_attachment
     mov edi, F_MESSAGE
     call field_focused
     mov r13d, eax
@@ -277,8 +369,13 @@ draw_composer:
     lea esi, [ebx + 12]
     lea edx, [r12d + 12]
     mov ecx, [rsp]
-    sub ecx, 24
+    sub ecx, 24 + BOX_BUTTONS_W
     call draw_area
+    mov edi, F_MESSAGE
+    mov esi, ebx
+    add esi, [rsp]
+    lea edx, [r12d + ebp]
+    call draw_box_buttons
     test r13d, r13d
     jz .done
     mov edi, ebx
@@ -288,7 +385,10 @@ draw_composer:
     mov r8d, INK(C_FAINT, ST_SMALL)
     call draw_text
 .done:
-    mov eax, r12d
+    mov edi, F_MESSAGE
+    call attachment_height
+    neg eax
+    add eax, r12d                           ; the attachment's top, or the box's
     add rsp, 8
     pop r13
     pop r12

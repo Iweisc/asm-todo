@@ -22,6 +22,7 @@ op_project:     resd 1
 op_labels:      resd 1
 op_text_len:    resd 1
 op_body_len:    resd 1
+op_image:       resd 1                      ; a comment's or message's, 0 for none
 op_text:        resq 1                      ; a title or name
 op_body:        resq 1                      ; a description, comment or message
 
@@ -29,7 +30,7 @@ section .rodata
 align 8
 op_handlers:
     dq 0, op_create_issue, op_set_field, op_delete_issue, op_comment, op_set_label, op_set_project
-    dq op_message
+    dq op_message, op_edit_comment, op_delete_comment
 OP_KINDS equ ($ - op_handlers) / 8
 
 section .text
@@ -213,6 +214,9 @@ h_subscribe:
     mov edi, [cur_idx]
     mov esi, r12d
     call send_snapshot
+    mov edi, [cur_idx]
+    mov esi, r12d
+    call send_channels
     mov rax, [cur]
     mov edi, [cur_idx]
     mov esi, r12d
@@ -253,6 +257,11 @@ wr_comment:
     lea rsi, [rbx + CMT_TEXT]
     movzx edx, word [rbx + CMT_LEN]
     call wr_str16
+    movzx esi, byte [rbx + CMT_EDITED]
+    call wr_u8
+    mov esi, IMAGE_ON_COMMENT
+    mov edx, [rbx + CMT_ID]
+    call wr_image_ref
     pop rbx
     ret
 
@@ -428,33 +437,30 @@ valid_body:
 .done:
     ret
 
-h_op:
-    push rbx
-    push r12
-    push r13
-    push r14
-    sub rsp, 8
-    call rd_u32
-    mov r12d, eax                           ; op number
-    call rd_u8
-    mov r13d, eax                           ; kind
-    call rd_u32
-    mov r14d, eax                           ; team
-    cmp r13d, OP_CREATE_ISSUE
-    je .read_create
-    cmp r13d, OP_SET_FIELD
-    je .read_set
-    cmp r13d, OP_DELETE_ISSUE
-    je .read_issue
-    cmp r13d, OP_COMMENT
-    je .read_comment
-    cmp r13d, OP_MESSAGE
-    je .read_comment                        ; the same shape: u32, str16
-    cmp r13d, OP_SET_LABEL
-    je .read_named
-    cmp r13d, OP_SET_PROJECT
-    jne .violation
-.read_named:
+; edi = op kind. Reads the fields that kind has into op_*.
+; -> eax = 1 if it's a kind we know
+read_op:
+    cmp edi, OP_CREATE_ISSUE
+    je .create
+    cmp edi, OP_SET_FIELD
+    je .set
+    cmp edi, OP_DELETE_ISSUE
+    je .id
+    cmp edi, OP_DELETE_COMMENT
+    je .id
+    cmp edi, OP_COMMENT
+    je .attached
+    cmp edi, OP_MESSAGE
+    je .attached                            ; the same shape: u32, str16, u32
+    cmp edi, OP_EDIT_COMMENT
+    je .body
+    cmp edi, OP_SET_LABEL
+    je .named
+    cmp edi, OP_SET_PROJECT
+    je .named
+    xor eax, eax
+    ret
+.named:
     call rd_u8
     mov [op_field], eax
     call rd_u32
@@ -462,8 +468,8 @@ h_op:
     call rd_str
     mov [op_text], rax
     mov [op_text_len], edx
-    jmp .read_end
-.read_create:
+    jmp .known
+.create:
     call rd_u8
     mov [op_status], eax
     call rd_u8
@@ -477,43 +483,65 @@ h_op:
     call rd_str
     mov [op_text], rax
     mov [op_text_len], edx
-    call rd_str16
-    mov [op_body], rax
-    mov [op_body_len], edx
-    jmp .read_end
-.read_comment:
+    jmp .read_body
+.attached:
     call rd_u32
     mov [op_issue], eax
     call rd_str16
     mov [op_body], rax
     mov [op_body_len], edx
-    jmp .read_end
-.read_set:
+    call rd_u32
+    mov [op_image], eax
+    jmp .known
+.body:
+    call rd_u32
+    mov [op_issue], eax
+.read_body:
+    call rd_str16
+    mov [op_body], rax
+    mov [op_body_len], edx
+    jmp .known
+.set:
     call rd_u32
     mov [op_issue], eax
     call rd_u8
     mov [op_field], eax
     cmp eax, FIELD_TITLE
-    je .read_title
+    je .title
     cmp eax, FIELD_DESCRIPTION
-    je .read_description
+    je .read_body
     call rd_u32
     mov [op_value], eax
-    jmp .read_end
-.read_title:
+    jmp .known
+.title:
     call rd_str
     mov [op_text], rax
     mov [op_text_len], edx
-    jmp .read_end
-.read_description:
-    call rd_str16
-    mov [op_body], rax
-    mov [op_body_len], edx
-    jmp .read_end
-.read_issue:
+    jmp .known
+.id:
     call rd_u32
     mov [op_issue], eax
-.read_end:
+.known:
+    mov eax, 1
+    ret
+
+; MSG_OP: applies one change, in the order the session numbered them.
+h_op:
+    push rbx
+    push r12
+    push r13
+    push r14
+    sub rsp, 8
+    call rd_u32
+    mov r12d, eax                           ; op number
+    call rd_u8
+    mov r13d, eax                           ; kind
+    call rd_u32
+    mov r14d, eax                           ; team
+    mov edi, r13d
+    call read_op
+    test eax, eax
+    jz .violation
     call rd_ok
     test eax, eax
     jz .violation
@@ -929,19 +957,19 @@ op_delete_issue:
 op_comment:
     push rbx
     push r12
-    sub rsp, 8
+    push r13
     call op_find_issue
     test rax, rax
     jz .gone
     mov r12, rax
-    cmp dword [op_body_len], 0
-    je .invalid
-    mov rsi, [op_body]
-    mov edx, [op_body_len]
-    mov ecx, COMMENT_MAX
-    call valid_body
+    mov rax, [op_team]
+    mov edi, [rax + TEAM_ID]
+    xor esi, esi
+    mov edx, COMMENT_MAX
+    call op_attachment
     test eax, eax
     jz .invalid
+    mov r13, rdx                            ; its image
     mov edi, T_COMMENTS
     mov esi, CMT_ISSUE
     mov edx, [r12 + ISS_ID]
@@ -970,6 +998,10 @@ op_comment:
     mov edi, T_COMMENTS
     mov rsi, rbx
     call db_touch
+    mov rdi, r13
+    mov esi, IMAGE_ON_COMMENT
+    mov edx, [rbx + CMT_ID]
+    call attach_image
     mov esi, EV_COMMENT
     call commit_event
     mov esi, [r12 + ISS_ID]
@@ -988,7 +1020,140 @@ op_comment:
 .full:
     mov eax, ACK_FULL
 .done:
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; edi = comment id -> rax = its row and rdx = its issue's if the issue is in
+; the op's team, else rax = 0
+op_find_comment:
+    lea rax, [comments]
+    mov ecx, [n_comments]
+.row:
+    test ecx, ecx
+    jz .none
+    cmp [rax + CMT_ID], edi
+    je .found
+    add rax, CMT_SIZE
+    dec ecx
+    jmp .row
+.found:
+    test edi, edi
+    jz .none                                ; 0 is a free slot
+    push rax
+    mov edi, [rax + CMT_ISSUE]
+    mov [op_issue], edi
+    call op_find_issue
+    mov rdx, rax
+    pop rax
+    test rdx, rdx
+    jnz .done
+.none:
+    xor eax, eax
+.done:
+    ret
+
+; Only its author can change a comment's text.
+op_edit_comment:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov edi, [op_issue]
+    call op_find_comment
+    test rax, rax
+    jz .gone
+    mov rbx, rax
+    mov r12, rdx
+    mov eax, [op_user]
+    cmp [rbx + CMT_AUTHOR], eax
+    jne .forbidden
+    cmp dword [op_body_len], 0
+    je .invalid
+    mov rsi, [op_body]
+    mov edx, [op_body_len]
+    mov ecx, COMMENT_MAX
+    call valid_body
+    test eax, eax
+    jz .invalid
+    lea rdi, [rbx + CMT_TEXT]
+    mov esi, COMMENT_MAX
+    call wipe                               ; in memory. The journal keeps it until compaction
+    mov ecx, [op_body_len]
+    mov [rbx + CMT_LEN], cx
+    lea rdi, [rbx + CMT_TEXT]
+    mov rsi, [op_body]
+    rep movsb
+    mov byte [rbx + CMT_EDITED], 1
+    mov edi, T_COMMENTS
+    mov rsi, rbx
+    call db_touch
+    mov esi, EV_COMMENT_EDITED
+    call commit_event
+    mov esi, [r12 + ISS_ID]
+    call wr_u32
+    mov rsi, rbx
+    call wr_comment
+    call send_event
+    xor eax, eax
+    jmp .done
+.gone:
+    mov eax, ACK_GONE
+    jmp .done
+.forbidden:
+    mov eax, ACK_FORBIDDEN
+    jmp .done
+.invalid:
+    mov eax, ACK_INVALID
+.done:
     add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
+; Its author can delete a comment, and so can the team's owners.
+op_delete_comment:
+    push rbx
+    push r12
+    push r13
+    mov edi, [op_issue]
+    call op_find_comment
+    test rax, rax
+    jz .gone
+    mov rbx, rax
+    mov r12d, [rdx + ISS_ID]
+    mov eax, [op_user]
+    cmp [rbx + CMT_AUTHOR], eax
+    je .allowed
+    mov rdi, [op_team]
+    mov edi, [rdi + TEAM_ID]
+    mov esi, eax
+    call find_member
+    test rax, rax
+    jz .forbidden
+    cmp dword [rax + MEM_ROLE], ROLE_OWNER
+    jne .forbidden
+.allowed:
+    mov r13d, [rbx + CMT_ID]
+    mov edi, T_COMMENTS
+    mov rsi, rbx
+    call free_row
+    mov esi, EV_COMMENT_DELETED
+    call commit_event
+    mov esi, r12d
+    call wr_u32
+    mov esi, r13d
+    call wr_u32
+    call send_event
+    xor eax, eax
+    jmp .done
+.gone:
+    mov eax, ACK_GONE
+    jmp .done
+.forbidden:
+    mov eax, ACK_FORBIDDEN
+.done:
+    pop r13
     pop r12
     pop rbx
     ret

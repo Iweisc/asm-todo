@@ -1,28 +1,21 @@
 # Already over the line when make lint arrived. Remove lines as they get fixed, never add.
 bigfile src/client/sync.asm
 bigfile src/client/views.asm
-long src/client/sync.asm on_event
 long src/client/sync.asm rebuild_view
 long src/client/views.asm draw_board
 long src/client/views.asm draw_create
-long src/client/views.asm draw_row
-long src/server/issues.asm h_op
 long tests/crypto_test.asm fuzz
 long tests/crypto_test.asm vectors
 nocomment src/client/draw.asm reset_clip
-nocomment src/client/input.asm clear_filters
 nocomment src/client/input.asm logout
 nocomment src/client/input.asm no_slots
 nocomment src/client/input.asm repeat_tick
-nocomment src/client/input.asm ui_click
 nocomment src/client/net.asm net_connect
 nocomment src/client/net.asm net_readable
 nocomment src/client/sync.asm on_ack
 nocomment src/client/sync.asm on_auth_fail
 nocomment src/client/sync.asm on_auth_ok
 nocomment src/client/sync.asm on_error
-nocomment src/client/sync.asm on_event
-nocomment src/client/sync.asm on_issue_detail
 nocomment src/client/sync.asm on_logged_out
 nocomment src/client/sync.asm on_members
 nocomment src/client/sync.asm on_snapshot
@@ -32,9 +25,6 @@ nocomment src/client/sync.asm pop_pending
 nocomment src/client/sync.asm send_subscribe
 nocomment src/client/sync.asm sync_on_offline
 nocomment src/client/sync.asm sync_on_open
-nocomment src/client/ui.asm open_team_modal
-nocomment src/client/ui.asm submit_create
-nocomment src/client/ui.asm submit_team
 nocomment src/client/ui.asm ui_layout_changed
 nocomment src/client/views.asm draw_create
 nocomment src/client/views.asm draw_team_modal
@@ -55,7 +45,6 @@ nocomment src/server/handlers.asm h_logout
 nocomment src/server/handlers.asm h_register
 nocomment src/server/handlers.asm h_resume
 nocomment src/server/handlers.asm kill_cur
-nocomment src/server/issues.asm h_op
 nocomment src/server/issues.asm h_subscribe
 nocomment src/server/issues.asm op_comment
 nocomment src/server/issues.asm op_create_issue

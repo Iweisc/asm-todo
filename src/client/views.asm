@@ -10,7 +10,9 @@ text s_active,          "Active"
 text s_projects,        "Projects"
 text s_members,         "Members"
 text s_remove,          "Remove"
-text s_leave,           "Leave"
+text s_direct_messages, "Direct messages"
+text s_invite_people,   "Invite people"
+text s_settings,        "Settings"
 text s_log_out,         "Log out"
 text s_all_issues,      "All issues"
 text s_active_issues,   "Active issues"
@@ -20,6 +22,8 @@ text s_list,            "List"
 text s_board,           "Board"
 text s_issue_count,     " issues"
 text s_no_issues,       "No issues here"
+text s_no_matches,      "No issues match these filters"
+text s_unfilter_hint,   "Remove a filter above to see more."
 text s_press_c,         "Press C to create one, or Ctrl+K for everything else."
 text s_loading,         "Loading..."
 text s_no_team,         "Create a team to start tracking issues."
@@ -44,7 +48,8 @@ text s_team_name,       "Name"
 text s_team_key,        "Identifier, used in issue IDs like ENG-12"
 text s_label_is,        "Label: "
 text s_project_is,      "Project: "
-text s_owner,           "owner"
+text s_priority_is,     "Priority: "
+text s_assignee_is,     "Assignee: "
 text s_connected_to,    "Connected to "
 text s_connecting_to,   "Connecting to "
 text s_offline,         "Offline, retrying in "
@@ -447,7 +452,18 @@ draw_login:
     sub r9d, ebx
     sub r9d, 16
     call draw_text_fit
+    cmp byte [restoring], 0
+    je .form
+    mov edi, ebx
+    lea esi, [r12d + 164]
+    lea rdx, [s_signing_in]
+    mov ecx, s_signing_in_len
+    mov r8d, INK(C_DIM, ST_BODY)
+    mov r9d, 340
+    call draw_text_fit
+    jmp .footer
 
+.form:
     mov edi, F_USER
     mov esi, ebx
     lea edx, [r12d + 140]
@@ -581,6 +597,12 @@ draw_header:
     jmp .done
 .close:
     lea r14d, [ebx + r13d - 44]
+    cmp byte [chat_open], 0
+    je .close_button
+    mov edi, r14d
+    mov esi, r12d
+    call draw_channel_edit_link
+.close_button:
     mov edi, A_CLOSE
     xor esi, esi
     call hovering
@@ -706,17 +728,45 @@ draw_filters:
     lea rsi, [s_label_is]
     mov edx, s_label_is_len
     xor ecx, ecx
-    call .filter_chip
+    call .named_chip
 .project:
     mov eax, [filter_project]
     test eax, eax
-    jz .count
+    jz .priority
     dec eax
     imul eax, eax, PJ_SIZE
     lea r15, [view_projects + rax]
     lea rsi, [s_project_is]
     mov edx, s_project_is_len
     mov ecx, 1
+    call .named_chip
+.priority:
+    mov edi, [filter_priority]
+    test edi, edi
+    js .assignee
+    call priority_name
+    mov r15, rsi
+    mov r9d, edx
+    lea rsi, [s_priority_is]
+    mov edx, s_priority_is_len
+    mov r8d, -1
+    mov ecx, 2
+    call .filter_chip
+.assignee:
+    mov edi, [filter_assignee]
+    test edi, edi
+    js .count
+    lea rsi, [s_no_assignee]
+    mov edx, s_no_assignee_len
+    jz .nobody
+    call user_name
+.nobody:
+    mov r15, rsi
+    mov r9d, edx
+    lea rsi, [s_assignee_is]
+    mov edx, s_assignee_is_len
+    mov r8d, -1
+    mov ecx, 3
     call .filter_chip
 .count:
     lea rdi, [scratch]
@@ -760,21 +810,26 @@ draw_filters:
     pop r12
     pop rbx
     ret
+; The same for a label or project, named and colored by its slot at r15.
+.named_chip:
+    mov r8d, [r15 + LB_COLOR]
+    movzx r9d, byte [r15 + LB_NAME_LEN]
+    lea r15, [r15 + LB_NAME]
 ; A removable filter chip at r14d. rsi = prefix, edx = its length,
-; r15 = label or project slot, ecx = A_UNFILTER's arg. Advances r14d.
+; r15 = name, r9d = its length, r8d = dot color or -1,
+; ecx = A_UNFILTER's arg. Advances r14d.
 .filter_chip:
     push rcx
     lea rdi, [scratch]
     call put_mem
-    lea rsi, [r15 + LB_NAME]
-    movzx edx, byte [r15 + LB_NAME_LEN]
+    mov rsi, r15
+    mov edx, r9d
     call put_mem
     lea rdx, [scratch]
     mov rcx, rdi
     sub rcx, rdx
     mov edi, r14d
     lea esi, [r12d + 8]
-    mov r8d, [r15 + LB_COLOR]
     call draw_removable_chip
     mov edx, eax
     mov edi, r14d
@@ -834,8 +889,13 @@ draw_list:
     mov r8d, s_loading_len
     cmp byte [loaded], 0
     je .note
+    call filtered
     lea rcx, [s_no_issues]
     mov r8d, s_no_issues_len
+    test eax, eax
+    jz .note
+    lea rcx, [s_no_matches]
+    mov r8d, s_no_matches_len
 .note:
     mov edi, [rsp]
     mov esi, [rsp + 8]
@@ -845,12 +905,18 @@ draw_list:
     call draw_centered
     cmp byte [loaded], 0
     je .done
+    call filtered
+    lea rcx, [s_press_c]
+    mov r8d, s_press_c_len
+    test eax, eax
+    jz .hint
+    lea rcx, [s_unfilter_hint]
+    mov r8d, s_unfilter_hint_len
+.hint:
     mov edi, [rsp]
     mov esi, [rsp + 8]
     mov edx, [rsp + 4]
     add edx, 104
-    lea rcx, [s_press_c]
-    mov r8d, s_press_c_len
     mov r9d, INK(C_FAINT, ST_BODY)
     call draw_centered
     jmp .done
@@ -1045,13 +1111,20 @@ draw_row:
     mov r9d, [rbx + CI_ID]
     call add_hit
 
+    ; No priority is only shown on hover, as the place to click to set one.
+    movzx edx, byte [rbx + CI_PRIORITY]
+    test edx, edx
+    jnz .priority
+    cmp dword [rsp + 8], C_PANEL
+    je .priority_hit
+.priority:
     lea edi, [r12d + 20]
     lea esi, [r13d + 12]
-    movzx edx, byte [rbx + CI_PRIORITY]
     mov ecx, C_DIM
     mov r8d, C_FAINT
     mov r9d, [rsp + 8]
     call draw_priority_icon
+.priority_hit:
     lea edi, [r12d + 14]
     lea esi, [r13d + 7]
     mov edx, 26
@@ -1105,30 +1178,12 @@ draw_row:
     mov r8d, INK(C_FAINT, ST_SMALL)
     call draw_scratch
     sub ebp, 10
-    movzx eax, byte [rbx + CI_PROJECT]
-    test eax, eax
-    jz .labels
-    dec eax
-    imul eax, eax, PJ_SIZE
-    lea rdi, [view_projects + rax]
-    call .chip
-.labels:
-    mov dword [rsp], LABEL_SLOTS - 1        ; right to left, so they read in slot order
-.label:
-    mov ecx, [rsp]
-    test ecx, ecx
-    js .title
-    movzx eax, word [rbx + CI_LABELS]
-    bt eax, ecx
-    jnc .next_label
-    imul eax, ecx, LB_SIZE
-    lea rdi, [view_labels + rax]
-    call .chip
-    test eax, eax
-    jz .title
-.next_label:
-    dec dword [rsp]
-    jmp .label
+    mov edi, ebp
+    mov esi, r13d
+    mov edx, r15d
+    mov rcx, rbx
+    call row_chips
+    mov ebp, eax
 .title:
     mov edi, r15d
     lea esi, [r13d + 24]
@@ -1147,40 +1202,6 @@ draw_row:
     pop rbp
     pop rbx
     ret
-; A label or project chip ending at ebp, if it leaves the title some room.
-; rdi = the label or project -> eax = 0 when there wasn't room
-.chip:
-    push r12
-    mov r12, rdi
-    xor eax, eax
-    cmp byte [r12 + LB_NAME_LEN], 0
-    je .chip_skip                           ; a deleted label
-    lea rdi, [r12 + LB_NAME]
-    movzx esi, byte [r12 + LB_NAME_LEN]
-    mov edx, 1
-    call chip_width
-    mov ecx, ebp
-    sub ecx, eax
-    lea edx, [r15d + 160]
-    cmp ecx, edx
-    jl .no_room
-    mov ebp, ecx
-    mov edi, ebp
-    lea esi, [r13d + 7]
-    lea rdx, [r12 + LB_NAME]
-    movzx ecx, byte [r12 + LB_NAME_LEN]
-    mov r8d, [r12 + LB_COLOR]
-    call draw_chip
-    sub ebp, 6
-.chip_skip:
-    mov eax, 1
-    pop r12
-    ret
-.no_room:
-    xor eax, eax
-    pop r12
-    ret
-
 %define CARD_H          94
 
 ; One issue on the board. edi = x, esi = y, edx = w, rcx = view issue
@@ -1248,6 +1269,25 @@ draw_card:
     call draw_text_fit
 
     ; Priority in a little box, then the project and labels while they fit.
+    ; No priority leaves the box out unless the card's hovered.
+    ; When it was made at the bottom right, and the chips stop short of it.
+    lea rdi, [scratch]
+    mov esi, [rbx + CI_CREATED]
+    call put_date
+    lea rdx, [scratch]
+    mov rcx, rdi
+    sub rcx, rdx
+    lea edi, [r12d + r14d - 14]
+    lea esi, [r13d + 75]
+    mov r8d, INK(C_FAINT, ST_SMALL)
+    call draw_link
+    lea r15d, [eax - 8]                     ; where chips must end
+    lea ebp, [r12d + 14]                    ; chip x
+    cmp byte [rbx + CI_PRIORITY], 0
+    jne .priority
+    cmp dword [rsp + 8], C_RAISED
+    je .chips
+.priority:
     lea edi, [r12d + 14]
     lea esi, [r13d + 58]
     mov edx, 24
@@ -1263,33 +1303,13 @@ draw_card:
     mov r8d, C_FAINT
     mov r9d, [rsp + 8]
     call draw_priority_icon
-    lea ebp, [r12d + 44]                    ; chip x
-    lea r15d, [r12d + r14d - 14]            ; where chips must end
-    movzx eax, byte [rbx + CI_PROJECT]
-    test eax, eax
-    jz .labels
-    dec eax
-    imul eax, eax, PJ_SIZE
-    lea rdi, [view_projects + rax]
-    call .chip
-.labels:
-    mov dword [rsp], 0
-.label:
-    mov ecx, [rsp]
-    cmp ecx, LABEL_SLOTS
-    jae .done
-    movzx eax, word [rbx + CI_LABELS]
-    bt eax, ecx
-    jnc .next_label
-    imul eax, ecx, LB_SIZE
-    lea rdi, [view_labels + rax]
-    call .chip
-    test eax, eax
-    jz .done
-.next_label:
-    inc dword [rsp]
-    jmp .label
-.done:
+    add ebp, 30
+.chips:
+    mov edi, ebp
+    mov esi, r13d
+    mov edx, r15d
+    mov rcx, rbx
+    call card_chips
     add rsp, 24
     pop r15
     pop r14
@@ -1297,34 +1317,6 @@ draw_card:
     pop r12
     pop rbp
     pop rbx
-    ret
-; A chip at ebp, if it fits before r15d. rdi = label or project -> eax = 0 if it didn't
-.chip:
-    push r12
-    mov r12, rdi
-    cmp byte [r12 + LB_NAME_LEN], 0
-    je .chip_skip
-    lea rdi, [r12 + LB_NAME]
-    movzx esi, byte [r12 + LB_NAME_LEN]
-    mov edx, 1
-    call chip_width
-    lea ecx, [ebp + eax]
-    cmp ecx, r15d
-    jg .no_room
-    mov edi, ebp
-    lea ebp, [ecx + 6]
-    lea esi, [r13d + 58]
-    lea rdx, [r12 + LB_NAME]
-    movzx ecx, byte [r12 + LB_NAME_LEN]
-    mov r8d, [r12 + LB_COLOR]
-    call draw_chip
-.chip_skip:
-    mov eax, 1
-    pop r12
-    ret
-.no_room:
-    xor eax, eax
-    pop r12
     ret
 
 ; The board: a column per status. edi = x, esi = top, edx = w, ecx = h
@@ -2009,43 +2001,12 @@ draw_activity:
 .comment:
     cmp dword [rsp], 0
     je .compose
-    mov edi, [r13 + CC_AUTHOR]
-    call user_name
-    push rsi
-    push rdx
-    mov r8, rsi
-    mov edi, r14d
-    mov esi, r12d
-    mov edx, 18
-    mov ecx, [r13 + CC_AUTHOR]
-    call draw_avatar
-    pop rcx
-    pop rdx
-    lea edi, [r14d + 28]
-    lea esi, [r12d + 14]
-    mov r8d, INK(C_TEXT, ST_MEDIUM)
-    call draw_text
-    mov [rsp + 4], eax
-    lea rdi, [scratch]
-    mov esi, [r13 + CC_CREATED]
-    call put_ago
-    mov rcx, rdi
-    mov edi, [rsp + 4]
-    add edi, 8
-    lea esi, [r12d + 14]
-    mov r8d, INK(C_FAINT, ST_SMALL)
-    call draw_scratch
-    mov r9d, INK(C_TEXT, ST_BODY)
-    mov eax, INK(C_DIM, ST_BODY)            ; not on the server yet
-    cmp byte [r13 + CC_PENDING], 0
-    cmovne r9d, eax
-    lea rdi, [r13 + CC_TEXT]
-    movzx esi, word [r13 + CC_LEN]
-    lea edx, [r14d + 28]
-    lea ecx, [r12d + 24]
-    lea r8d, [r15d - 28]
-    call draw_wrapped
-    lea r12d, [r12d + eax + 44]
+    mov rdi, r13
+    mov esi, r14d
+    mov edx, r12d
+    mov ecx, r15d
+    call draw_comment
+    add r12d, eax
     add r13, CC_SIZE
     dec dword [rsp]
     jmp .comment
@@ -2078,10 +2039,17 @@ draw_comment_box:
     mov r12d, esi
     mov r15d, edx
     mov edi, F_COMMENT
+    mov esi, r14d
+    mov edx, r12d
+    call draw_attachment
+    mov edi, F_COMMENT
+    call attachment_height
+    add r12d, eax                           ; the box goes under it
+    mov edi, F_COMMENT
     call field_addr
     mov rdi, [rax + FD_BUF]
     mov esi, [rax + FD_LEN]
-    lea edx, [r15d - 24]
+    lea edx, [r15d - 24 - BOX_BUTTONS_W]
     mov ecx, ST_BODY
     call text_height
     lea ebp, [eax + 24]
@@ -2109,8 +2077,12 @@ draw_comment_box:
     mov edi, F_COMMENT
     lea esi, [r14d + 12]
     lea edx, [r12d + 12]
-    lea ecx, [r15d - 24]
+    lea ecx, [r15d - 24 - BOX_BUTTONS_W]
     call draw_area
+    mov edi, F_COMMENT
+    lea esi, [r14d + r15d]
+    lea edx, [r12d + ebp]
+    call draw_box_buttons
     lea r12d, [r12d + ebp + 8]
     test r13d, r13d
     jz .done
@@ -2131,7 +2103,7 @@ draw_comment_box:
     pop rbx
     ret
 
-; Shade, a click-catcher to dismiss, and the modal's box.
+; Shade, a click-catcher to dismiss, and the modal's box with an X to close it.
 ; edi = width, esi = height -> eax = x, edx = y
 modal_box:
     push rbx
@@ -2165,6 +2137,32 @@ modal_box:
     mov r8d, A_BLOCK
     xor r9d, r9d
     call add_hit
+    lea r12d, [ebx + r12d - 44]             ; the X
+    mov edi, A_CLOSE_MODAL
+    xor esi, esi
+    call hovering
+    test eax, eax
+    jz .close_hit
+    mov edi, r12d
+    mov esi, 96
+    mov edx, 28
+    mov ecx, 28
+    mov r8d, C_HOVER
+    mov r9d, 6
+    call fill_rrect
+.close_hit:
+    mov edi, r12d
+    mov esi, 96
+    mov edx, 28
+    mov ecx, 28
+    mov r8d, A_CLOSE_MODAL
+    xor r9d, r9d
+    call add_hit
+    lea edi, [r12d + 14]
+    mov esi, 110
+    mov edx, 18
+    mov ecx, C_DIM
+    call draw_cross
     mov eax, ebx
     mov edx, 80
     pop r13
@@ -2524,8 +2522,33 @@ draw_app:
     jmp .done
 .team_modal:
     cmp byte [modal], M_TEAM
-    jne .done
+    jne .labels_modal
     call draw_team_modal
+    jmp .done
+.labels_modal:
+    cmp byte [modal], M_LABELS
+    jne .password_modal
+    call draw_labels_modal
+    jmp .done
+.password_modal:
+    cmp byte [modal], M_PASSWORD
+    jne .settings_modal
+    call draw_password_modal
+    jmp .done
+.settings_modal:
+    cmp byte [modal], M_SETTINGS
+    jne .channel_modal
+    call draw_team_settings
+    jmp .done
+.channel_modal:
+    cmp byte [modal], M_CHANNEL
+    jne .image_modal
+    call draw_channel_dialog
+    jmp .done
+.image_modal:
+    cmp byte [modal], M_IMAGE
+    jne .done
+    call draw_image_view
 .done:
     pop r15
     pop r14
@@ -2572,7 +2595,8 @@ draw_frame:
 .overlays:
     call draw_toast
     cmp byte [menu_open], 0
-    je .done
+    je .pump
     call draw_menu
-.done:
-    ret
+.pump:
+    jmp images_pump                         ; what this frame wanted to show
+

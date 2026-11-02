@@ -19,10 +19,15 @@ build/crypto-test: tests/crypto_test.asm $(COMMON)
 	$(NASM) tests/crypto_test.asm -o build/crypto-test.o
 	$(LD) build/crypto-test.o -o $@
 
-build/ui-test: tests/ui_test.asm src/client/*.asm $(COMMON)
+build/ui-test: tests/ui_test.asm tests/ui_controls.asm src/client/*.asm $(COMMON)
 	@mkdir -p build
 	$(NASM) tests/ui_test.asm -o build/ui-test.o
 	$(LD) build/ui-test.o -o $@
+
+build/png-test: tests/png_test.asm tests/images/* src/client/inflate.asm src/client/png.asm $(COMMON)
+	@mkdir -p build
+	$(NASM) tests/png_test.asm -o build/png-test.o
+	$(LD) build/png-test.o -o $@
 
 build/font-preview: tests/font_preview.asm src/client/font.asm src/client/draw.asm src/client/text.asm src/client/shapes.asm src/client/icons.asm $(COMMON)
 	@mkdir -p build
@@ -33,9 +38,10 @@ build/font-preview: tests/font_preview.asm src/client/font.asm src/client/draw.a
 preview: build/font-preview
 	./build/font-preview > build/preview.ppm
 
-test: build/crypto-test build/ui-test
+test: build/crypto-test build/ui-test build/png-test
 	./build/crypto-test
 	./build/ui-test
+	./build/png-test
 
 # Starts the server with ./issues.db, opens a window pinned to that server's key,
 # and stops the server when the window closes.

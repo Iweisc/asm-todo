@@ -28,7 +28,7 @@ Limits live in `src/common/config.inc` and nowhere else. Row offsets are typed b
 
 - Message types, op kinds, event kinds and field numbers are appended, never renumbered or reused.
 - A new field lands in three places in the same commit: the layout comment in `config.inc`, the writer, and the reader.
-- A change to a row that goes on disk bumps `DB_VERSION` in `src/server/db.asm`. The loader refuses a file with another version rather than guessing at it.
+- A change to a row that goes on disk bumps `DB_VERSION` in `src/server/db.asm`. The loader refuses a file with another version rather than guessing at it. The exceptions are a new field in bytes that were always zero and a new table after the others, where the previous version still reads correctly as it is. Then the version still goes up, and the loader takes the old ones and saves the new one.
 
 ## Crypto and Noise
 

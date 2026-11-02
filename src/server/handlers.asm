@@ -3,6 +3,8 @@
 
 %define JOB_LOGIN           1
 %define JOB_REGISTER        2
+%define JOB_CHECK_PASSWORD  3               ; the current password, before a change
+%define JOB_NEW_PASSWORD    4
 %define JOB_SLICE           25000       ; PBKDF2 iterations per event loop turn (~12ms)
 %define MAX_AUTH_FAILS      5
 %define RATE_SLOTS          64
@@ -64,6 +66,8 @@ handle_message:
     je .anonymous
     cmp eax, MSG_LOGOUT
     je .logout
+    cmp eax, MSG_CHANGE_PASSWORD
+    je .change_password
     cmp eax, MSG_CREATE_TEAM
     je .create_team
     cmp eax, MSG_ADD_MEMBER
@@ -76,6 +80,22 @@ handle_message:
     je .open_issue
     cmp eax, MSG_OPEN_CHAT
     je .open_chat
+    cmp eax, MSG_SET_ROLE
+    je .set_role
+    cmp eax, MSG_RENAME_TEAM
+    je .rename_team
+    cmp eax, MSG_SET_CHANNEL
+    je .set_channel
+    cmp eax, MSG_EDIT_MESSAGE
+    je .edit_message
+    cmp eax, MSG_DELETE_MESSAGE
+    je .delete_message
+    cmp eax, MSG_UPLOAD_IMAGE
+    je .upload_image
+    cmp eax, MSG_IMAGE_PART
+    je .image_part
+    cmp eax, MSG_GET_IMAGE
+    je .get_image
     cmp eax, MSG_OP
     je .op
 .violation:
@@ -102,6 +122,9 @@ handle_message:
 .logout:
     call h_logout
     jmp .done
+.change_password:
+    call h_change_password
+    jmp .done
 .create_team:
     call h_create_team
     jmp .done
@@ -119,6 +142,30 @@ handle_message:
     jmp .done
 .open_chat:
     call h_open_chat
+    jmp .done
+.set_role:
+    call h_set_role
+    jmp .done
+.rename_team:
+    call h_rename_team
+    jmp .done
+.set_channel:
+    call h_set_channel
+    jmp .done
+.edit_message:
+    call h_edit_message
+    jmp .done
+.delete_message:
+    call h_delete_message
+    jmp .done
+.upload_image:
+    call h_upload_image
+    jmp .done
+.image_part:
+    call h_image_part
+    jmp .done
+.get_image:
+    call h_get_image
     jmp .done
 .op:
     call h_op
@@ -574,6 +621,8 @@ finish_job:
     mov r12, rax
     and byte [r12 + C_FLAGS], ~F_BUSY
     dec dword [jobs_pending]
+    cmp byte [r12 + C_JOB_KIND], JOB_CHECK_PASSWORD
+    jae .password
     cmp byte [r12 + C_JOB_KIND], JOB_REGISTER
     je .register
 
@@ -652,12 +701,18 @@ finish_job:
     lea rsi, [e_full]
     mov edx, e_full_len
     call auth_failed
+    jmp .cleanup
+.password:
+    call finish_password_job
+    test eax, eax
+    jnz .busy                               ; on to hashing the new one
 .cleanup:
     lea rdi, [r12 + C_JOB_NAME_LEN]         ; name, salt and hash state, all of it
     mov esi, C_JOB + PB_SIZE - C_JOB_NAME_LEN
     call wipe
     mov edi, ebx                            ; input that arrived while hashing
     call conn_process
+.busy:
     pop r13
     pop r12
     pop rbx

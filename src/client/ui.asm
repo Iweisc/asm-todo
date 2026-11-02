@@ -22,8 +22,9 @@
 %define COL_MIN_W       200
 %define LINE_H          20              ; wrapped body text
 %define MENU_W          520
+%define MENU_CTX_W      300             ; a right click's menu
 %define MENU_ROW_H      36
-%define MENU_MAX        96
+%define MENU_MAX        128             ; the filter menu: every label, project, priority and member
 %define MENU_SHOWN      9               ; rows visible at once
 %define WHEEL_NOTCH     15              ; pixels compositors report per wheel notch
 %define BTN_PRIMARY     1               ; draw_button kinds, 0 is the outlined one
@@ -46,6 +47,7 @@
 %define C_DANGER_HI     0xf07070
 %define C_ONLINE        0x4cb782
 %define C_SHADE         0x070809        ; behind a modal
+%define C_SELECTION     0x2d3258        ; selected text, the accent dimmed
 
 ; wp_cursor_shape_device_v1 shapes
 %define CURSOR_DEFAULT  1
@@ -77,6 +79,10 @@
 %define KEY_M           50
 %define KEY_P           25
 %define KEY_S           31
+%define KEY_V           47
+%define KEY_X           45
+%define KEY_Y           21
+%define KEY_Z           44
 
 ; wl_keyboard modifier bits
 %define MOD_SHIFT       1
@@ -97,10 +103,16 @@
 %define FD_X            44              ; where its text was last drawn, for clicks
 %define FD_Y            48              ; the top, wrapped text only
 %define FD_W            52              ; 0 until it's drawn
-%define FD_SIZE         56
-fits FD_W, 4, FD_SIZE
+%define FD_ANCHOR       56              ; the selection's other end, FD_CURSOR when there's none
+%define FD_SIZE         64
+fits FD_ANCHOR, 4, FD_SIZE
 %define FF_MASKED       1
 %define FF_MULTILINE    2
+
+; Kinds of edit, which undo.asm groups into steps
+%define UK_TYPE         1
+%define UK_DELETE       2
+%define UK_OTHER        3               ; paste or cut: a step each
 
 %define F_NONE          -1
 %define F_USER          0
@@ -115,6 +127,12 @@ fits FD_W, 4, FD_SIZE
 %define F_DESC          9
 %define F_COMMENT       10
 %define F_MESSAGE       11
+%define F_EDIT          12              ; a comment being edited
+%define F_RENAME        13              ; a label or project's name
+%define F_OLD_PASS      14              ; changing your password
+%define F_NEW_PASS      15
+%define F_TEAM_RENAME   16              ; the team's name in its settings
+%define F_CHANNEL       17              ; a channel's name
 
 ; Clickable regions
 %define HIT_X           0
@@ -142,7 +160,7 @@ fits FD_W, 4, FD_SIZE
 %define A_ISSUE         13              ; arg = issue id
 %define A_LAYOUT        14              ; arg = 0 list, 1 board
 %define A_FILTER        15
-%define A_UNFILTER      16              ; arg = 0 label, 1 project
+%define A_UNFILTER      16              ; arg = 0 label, 1 project, 2 priority, 3 assignee
 %define A_PICK          17              ; arg = MK_*, for the open issue or the draft
 %define A_MENU_ITEM     18              ; arg = item index
 %define A_DISMISS       19              ; the shade around a modal or menu
@@ -153,6 +171,28 @@ fits FD_W, 4, FD_SIZE
 %define A_ROW_STATUS    24              ; arg = issue id
 %define A_ROW_PRIORITY  25              ; arg = issue id
 %define A_CHAT          26              ; arg = peer, 0 for the team's channel
+%define A_COMMENT       27              ; arg = comment id, shows its actions on hover
+%define A_EDIT_COMMENT  28              ; arg = comment id
+%define A_DELETE_COMMENT 29             ; arg = comment id
+%define A_CLOSE_MODAL   30              ; the X in a modal's corner
+%define A_RENAME        31              ; arg = label or project item, see labels.asm
+%define A_REMOVE_NAMED  32              ; arg = label or project item
+%define A_CHANGE_PASSWORD 33
+%define A_SETTINGS      34              ; arg = the field to focus, F_NONE for none
+%define A_INVITE        35
+%define A_SET_ROLE      36              ; arg = user id, switches them between owner and member
+%define A_SAVE_TEAM_NAME 37
+%define A_CHANNEL_DIALOG 38             ; arg = the channel's slot, 0 for a new one
+%define A_SAVE_CHANNEL  39
+%define A_DELETE_CHANNEL 40
+%define A_MESSAGE       41              ; arg = message id, shows its actions on hover
+%define A_EDIT_MESSAGE  42              ; arg = message id
+%define A_DELETE_MESSAGE 43             ; arg = message id
+%define A_IMAGE         44              ; arg = image id, opens it
+%define A_DROP_ATTACHMENT 45            ; arg = the field whose attachment goes
+%define A_ATTACH_PICK   46              ; arg = the field to attach a file to
+%define A_SEND          47              ; arg = the field to send
+%define BOX_BUTTONS_W   76              ; what a box's text leaves clear for them
 
 ; Views of a team's issues
 %define V_ALL           0
@@ -164,6 +204,11 @@ fits FD_W, 4, FD_SIZE
 %define M_NONE          0
 %define M_CREATE        1
 %define M_TEAM          2
+%define M_LABELS        3
+%define M_PASSWORD      4
+%define M_SETTINGS      5
+%define M_CHANNEL       6
+%define M_IMAGE         7
 
 ; Menus. The first five are one less than the FIELD_* they change.
 %define MK_STATUS       0
@@ -181,13 +226,42 @@ fits FD_W, 4, FD_SIZE
 %define MI_VALUE        20
 %define MI_CHECK        24
 %define MI_HINT         25              ; a shortcut letter, 0 for none
+%define MI_GROUP        26              ; FG_*, what a filter item filters by, 0 elsewhere
 %define MI_SIZE         32
+%define FG_LABEL        1
+%define FG_PROJECT      2
+%define FG_PRIORITY     3
+%define FG_ASSIGNEE     4
 %define IC_NONE         0
 %define IC_STATUS       1
 %define IC_PRIORITY     2
 %define IC_AVATAR       3               ; arg = user id
 %define IC_DOT          4               ; arg = color
 %define IC_PLUS         5
+%define IC_ISSUE        6               ; arg = status. Matched by the caller, by title or ID
+%define IC_GLYPH        7               ; arg = GL_*
+
+; glyphs.asm's line icons, in the order of line_icons
+%define GL_SEND         0
+%define GL_IMAGE        1
+%define GL_SETTINGS     2
+%define GL_PERSON       3
+%define GL_ISSUES       4
+%define GL_ACTIVE       5
+%define GL_BACKLOG      6
+%define GL_HASH         7
+%define GL_PLUS         8
+%define GL_BARS         9
+%define GL_TAG          10
+%define GL_CUBE         11
+%define GL_COPY         12
+%define GL_TRASH        13
+%define GL_GRID         14
+%define GL_LIST         15
+%define GL_FUNNEL       16
+%define GL_CROSS        17
+%define GL_LOCK         18
+%define GL_LOGOUT       19
 
 ; Command menu entries, in MI_VALUE
 %define CMD_NEW_ISSUE   1
@@ -201,6 +275,17 @@ fits FD_W, 4, FD_SIZE
 %define CMD_FILTER      (CMD_DELETE + 1)
 %define CMD_CLEAR       (CMD_FILTER + 1)
 %define CMD_CHAT        (CMD_CLEAR + 1)  ; the team's channel
+%define CMD_COPY_ID     (CMD_CHAT + 1)
+%define CMD_LABELS      (CMD_COPY_ID + 1)
+%define CMD_PASSWORD    (CMD_LABELS + 1)
+%define CMD_SETTINGS    (CMD_PASSWORD + 1)
+%define CMD_INVITE      (CMD_SETTINGS + 1)
+%define CMD_NEW_CHANNEL (CMD_INVITE + 1)
+%define CMD_ISSUE       0x40000000      ; + issue id, opens it
+
+; Filter menu values. Labels are ~slot and projects their number.
+%define FILTER_PRIORITY 0x10000000      ; + priority
+%define FILTER_ASSIGNEE 0x20000000      ; + user id, 0 for nobody
 
 ; Rows of the list view
 %define RW_ISSUE        0               ; qword, 0 for a group header
@@ -218,6 +303,7 @@ text s_password,        "Password"
 text s_log_in,          "Log in"
 text s_sign_up,         "Sign up"
 text s_checking,        "Checking..."
+text s_signing_in,      "Signing in..."
 text s_filter_hint,     "Filter..."
 text s_command_hint,    "Type a command or search..."
 text s_title_hint,      "Issue title"
@@ -227,12 +313,13 @@ text s_team_key_hint,   "KEY"
 text s_member_hint,     "Invite by username"
 text s_comment_hint,    "Leave a comment..."
 text s_message_hint,    "Write a message..."
+text s_rename_field_hint, "Name"
 
 %macro FIELD 5                          ; buffer, max, flags, style, hint
     dq %1
     dd %2, 0, 0, 0, %3, %4
     dq %5
-    dd %5_len, 0, 0, 0
+    dd %5_len, 0, 0, 0, 0, 0
 %endmacro
 
 align 8
@@ -244,14 +331,22 @@ fields:
     FIELD new_desc_buf, DESC_MAX, FF_MULTILINE, ST_BODY, s_desc_hint
     FIELD team_name_buf, TEAMNAME_MAX, 0, ST_BODY, s_team_name_hint
     FIELD team_key_buf, TEAM_KEY_MAX, 0, ST_BODY, s_team_key_hint
-    FIELD member_buf, USERNAME_MAX, 0, ST_SMALL, s_member_hint
+    FIELD member_buf, USERNAME_MAX, 0, ST_BODY, s_member_hint
     FIELD title_buf, TITLE_MAX, 0, ST_TITLE, s_title_hint
     FIELD desc_buf, DESC_MAX, FF_MULTILINE, ST_BODY, s_desc_hint
     FIELD comment_buf, COMMENT_MAX, FF_MULTILINE, ST_BODY, s_comment_hint
     FIELD message_buf, MESSAGE_MAX, FF_MULTILINE, ST_BODY, s_message_hint
+    FIELD edit_buf, COMMENT_MAX, FF_MULTILINE, ST_BODY, s_comment_hint
+    FIELD rename_buf, PROJECT_NAME_MAX, 0, ST_BODY, s_rename_field_hint
+    FIELD old_pass_buf, PASSWORD_MAX, FF_MASKED, ST_BODY, s_password
+    FIELD new_pass_buf, PASSWORD_MAX, FF_MASKED, ST_BODY, s_password
+    FIELD team_rename_buf, TEAMNAME_MAX, 0, ST_BODY, s_team_name_hint
+    FIELD channel_buf, CHANNEL_NAME_MAX, 0, ST_BODY, s_channel_field_hint
 
 focus:          dd F_USER
 filter_label:   dd -1                   ; a label slot, or -1
+filter_priority: dd -1                  ; a priority, or -1
+filter_assignee: dd -1                  ; a user id, 0 for unassigned, or -1
 repeat_rate:    dd 25                   ; until the compositor tells us otherwise
 repeat_delay:   dd 600
 
@@ -269,6 +364,11 @@ title_buf:      resb TITLE_MAX
 desc_buf:       resb DESC_MAX
 comment_buf:    resb COMMENT_MAX
 message_buf:    resb MESSAGE_MAX
+edit_buf:       resb COMMENT_MAX
+rename_buf:     resb PROJECT_NAME_MAX   ; the longer of a label's and a project's
+old_pass_buf:   resb PASSWORD_MAX
+new_pass_buf:   resb PASSWORD_MAX
+team_rename_buf: resb TEAMNAME_MAX
 mask_buf:       resb PASSWORD_MAX       ; a row of '*' for the password field
 alignb 8
 server_label:   resq 1                  ; "ip:port" for the status line
@@ -305,6 +405,11 @@ menu_issue:     resd 1                  ; what the menu changes, 0 for the new i
 menu_sel:       resd 1
 menu_scroll:    resd 1
 menu_count:     resd 1
+menu_group:     resd 1                  ; the FG_* push_item gives what it adds
+menu_w:         resd 1                  ; this frame's width
+menu_ax:        resd 1                  ; where a right click's menu opens
+menu_ay:        resd 1
+menu_context:   resb 1                  ; 1 when the menu came from a right click
 menu_wheel:     resd 1                  ; wheel pixels short of a whole notch
 delete_armed:   resd 1                  ; the issue whose Delete was clicked once, or 0
 menu_items:     resb MENU_MAX * MI_SIZE
@@ -350,6 +455,8 @@ field_addr:
 ; edi = field -> rax = its struct. Wipes the text too, which matters for the password.
 field_clear:
     push rbx
+    call undo_drop
+    call attach_drop
     call field_addr
     mov rbx, rax
     mov rdi, [rbx + FD_BUF]
@@ -358,6 +465,7 @@ field_clear:
     xor eax, eax
     mov [rbx + FD_LEN], eax
     mov [rbx + FD_CURSOR], eax
+    mov [rbx + FD_ANCHOR], eax
     mov [rbx + FD_SCROLL], eax
     mov rax, rbx
     pop rbx
@@ -381,6 +489,7 @@ field_set:
     call put_mem
     mov [rbx + FD_LEN], r13d
     mov [rbx + FD_CURSOR], r13d
+    mov [rbx + FD_ANCHOR], r13d
     pop r13
     pop r12
     pop rbx
@@ -485,11 +594,39 @@ commit_edit:
 
 ; The sync layer logged us in.
 ui_logged_in:
+    sub rsp, 8
     mov edi, F_PASS
     call field_clear
-    mov dword [focus], F_NONE
-    mov byte [modal], M_NONE
+    call close_dialogs
+    add rsp, 8
+    ret
+
+; Logged out, by us or the server: nothing of the last login stays open,
+; and typing goes to the form again.
+ui_logged_out:
+    sub rsp, 8
+    call close_dialogs
+    call undo_wipe
+    call images_reset
+    mov edi, [att_field]
+    call attach_drop
+    mov dword [focus], F_USER
+    add rsp, 8
+    ret
+
+; Closes every dialog, menu and edit in progress, dropping what they held.
+close_dialogs:
+    sub rsp, 8
     mov byte [menu_open], 0
+    call stop_comment_edit
+    call stop_rename
+    call close_modal
+    add rsp, 8
+    ret
+
+; The session saved by the last run didn't work out, so the form comes back.
+ui_login_form:
+    mov dword [focus], F_USER
     ret
 
 ; The sync layer switched teams, or the team list changed under us.
@@ -503,11 +640,24 @@ ui_team_opened:
     mov [filter_project], eax
     mov [view_mode], eax
     mov dword [filter_label], -1
+    mov dword [filter_priority], -1
+    mov dword [filter_assignee], -1
     mov [menu_open], al
     cmp byte [modal], M_TEAM
-    jne .draft
+    jne .labels
     mov [modal], al                         ; the team we were creating is here
+.labels:
+    cmp byte [modal], M_LABELS              ; its slots are the old team's
+    je .old_team
+    cmp byte [modal], M_SETTINGS
+    je .old_team
+    cmp byte [modal], M_CHANNEL
+    jne .draft
+.old_team:
+    call stop_rename
+    call close_modal
 .draft:
+    mov byte [chan_open_new], 0
     mov edi, F_MESSAGE                      ; drafts belong to the old team
     call field_clear
     mov edi, F_MEMBER
@@ -633,6 +783,10 @@ update_hover:
     cmovbe edi, eax
     cmp r8d, A_DISMISS
     cmove edi, eax
+    cmp r8d, A_COMMENT
+    cmove edi, eax
+    cmp r8d, A_MESSAGE
+    cmove edi, eax
     mov eax, CURSOR_TEXT
     cmp r8d, A_FIELD
     cmove edi, eax
@@ -690,15 +844,40 @@ issue_shown:
 .label:
     mov ecx, [filter_label]
     test ecx, ecx
-    js .yes
+    js .priority
     movzx eax, word [rdi + CI_LABELS]
     bt eax, ecx
     jnc .no
+.priority:
+    mov eax, [filter_priority]
+    test eax, eax
+    js .assignee
+    cmp [rdi + CI_PRIORITY], al
+    jne .no
+.assignee:
+    mov eax, [filter_assignee]
+    test eax, eax
+    js .yes
+    cmp [rdi + CI_ASSIGNEE], eax
+    jne .no
 .yes:
     mov eax, 1
     ret
 .no:
     xor eax, eax
+    ret
+
+; -> eax = 1 if any filter is on
+filtered:
+    xor eax, eax
+    cmp dword [filter_project], 0
+    setne al
+    mov ecx, [filter_label]                 ; -1 when off, so the AND stays -1 only if all are
+    and ecx, [filter_priority]
+    and ecx, [filter_assignee]
+    shr ecx, 31
+    xor ecx, 1
+    or eax, ecx
     ret
 
 ; rdi = view issue -> rax = its sort key: priority (urgent first, none last),
@@ -1092,6 +1271,9 @@ clamp_scroll_to:
 ; A held card starts moving once the pointer travels DRAG_SLOP, so a
 ; click with a shaky hand still opens it.
 ui_pointer_moved:
+    call drag_select
+    test eax, eax
+    jnz update_hover
     cmp dword [drag_id], 0
     je pointer_hover
     cmp byte [pointer_inside], 0
@@ -1182,174 +1364,6 @@ do_auth:
     pop rbx
     ret
 
-; Opens the create modal. edi = the status it starts in
-open_create:
-    push rbx
-    mov ebx, edi
-    cmp dword [current_team], 0
-    je .done
-    mov byte [menu_open], 0
-    mov byte [modal], M_CREATE
-    mov [new_status], ebx
-    xor eax, eax
-    mov [new_priority], eax
-    mov [new_assignee], eax
-    mov [new_labels], eax
-    mov eax, [filter_project]               ; start inside the project being looked at
-    mov [new_project], eax
-    cmp dword [view_mode], V_MINE
-    jne .fields
-    mov eax, [my_id]
-    mov [new_assignee], eax
-.fields:
-    mov edi, F_NEW_TITLE
-    call field_clear
-    mov edi, F_NEW_DESC
-    call field_clear
-    mov edi, F_NEW_TITLE
-    call set_focus
-.done:
-    pop rbx
-    ret
-
-submit_create:
-    push rbx
-    mov edi, F_NEW_TITLE
-    call field_trimmed
-    test edx, edx
-    jz .need_title
-    push rsi
-    push rdx
-    mov edi, OP_CREATE_ISSUE
-    call new_op
-    mov rbx, rax
-    pop rdx
-    pop rsi
-    call draft_text
-    mov edi, F_NEW_DESC
-    call field_trimmed
-    call draft_body
-    mov eax, [new_status]
-    mov [rbx + PO_STATUS], al
-    mov eax, [new_priority]
-    mov [rbx + PO_PRIORITY], al
-    mov eax, [new_assignee]
-    mov [rbx + PO_ASSIGNEE], eax
-    mov eax, [new_project]
-    mov [rbx + PO_PROJECT], al
-    mov eax, [new_labels]
-    mov [rbx + PO_LABELS], eax
-    call queue_draft
-    test eax, eax
-    jz .done
-    mov byte [modal], M_NONE
-    mov edi, F_NONE
-    call set_focus
-    jmp .done
-.need_title:
-    mov edi, F_NEW_TITLE
-    call set_focus
-.done:
-    pop rbx
-    ret
-
-open_team_modal:
-    mov byte [menu_open], 0
-    mov byte [modal], M_TEAM
-    mov byte [key_edited], 0
-    mov edi, F_TEAM_NAME
-    call field_clear
-    mov edi, F_TEAM_KEY
-    call field_clear
-    mov edi, F_TEAM_NAME
-    jmp set_focus
-
-submit_team:
-    push rbx
-    push r12
-    sub rsp, 8
-    mov edi, F_TEAM_KEY
-    call field_trimmed
-    mov rbx, rsi
-    mov r12d, edx
-    mov edi, F_TEAM_NAME
-    call field_trimmed
-    test edx, edx
-    jz .done
-    mov rcx, rsi
-    mov r8d, edx
-    mov rsi, rbx
-    mov edx, r12d
-    call sync_create_team
-.done:
-    add rsp, 8
-    pop r12
-    pop rbx
-    ret
-
-; The key follows the name until it's typed by hand: the first letters of
-; up to three words, or of the one word, uppercased.
-derive_team_key:
-    cmp byte [key_edited], 0
-    jne .done
-    lea rdi, [team_key_buf]
-    mov rsi, [fields + F_TEAM_NAME * FD_SIZE + FD_BUF]
-    mov ecx, [fields + F_TEAM_NAME * FD_SIZE + FD_LEN]
-    xor edx, edx                            ; letters written
-    mov r8d, 1                              ; at the start of a word
-    xor r9d, r9d                            ; words seen
-.char:
-    test ecx, ecx
-    jz .one_word
-    movzx eax, byte [rsi]
-    inc rsi
-    dec ecx
-    or eax, 0x20
-    lea r10d, [eax - 'a']
-    cmp r10d, 'z' - 'a'
-    ja .space
-    test r8d, r8d
-    jz .char
-    xor r8d, r8d
-    inc r9d
-    cmp edx, 3
-    jae .char
-    sub eax, 0x20
-    mov [rdi + rdx], al
-    inc edx
-    jmp .char
-.space:
-    mov r8d, 1
-    jmp .char
-.one_word:
-    ; A single word gives one letter, so take its first three instead.
-    cmp r9d, 1
-    jne .store
-    mov rsi, [fields + F_TEAM_NAME * FD_SIZE + FD_BUF]
-    mov ecx, [fields + F_TEAM_NAME * FD_SIZE + FD_LEN]
-    xor edx, edx
-.letter:
-    test ecx, ecx
-    jz .store
-    cmp edx, 3
-    jae .store
-    movzx eax, byte [rsi]
-    inc rsi
-    dec ecx
-    or eax, 0x20
-    lea r10d, [eax - 'a']
-    cmp r10d, 'z' - 'a'
-    ja .letter
-    sub eax, 0x20
-    mov [rdi + rdx], al
-    inc edx
-    jmp .letter
-.store:
-    mov [fields + F_TEAM_KEY * FD_SIZE + FD_LEN], edx
-    mov [fields + F_TEAM_KEY * FD_SIZE + FD_CURSOR], edx
-.done:
-    ret
-
 ; edi = issue id. Selects it and opens the detail view.
 open_issue:
     push rbx
@@ -1362,6 +1376,7 @@ open_issue:
     call set_focus
     mov edi, F_COMMENT
     call field_clear
+    call stop_comment_edit
     mov edi, ebx
     call sync_open_issue
 .done:
@@ -1370,6 +1385,7 @@ open_issue:
 
 ; Back to the list, from the open issue or conversation.
 close_detail:
+    call stop_comment_edit
     mov edi, F_NONE
     call set_focus
     call sync_close_chat
@@ -1384,11 +1400,9 @@ select_team:
     call sync_select_team
     jmp ui_team_opened
 
-; Starts editing the open issue's title or description at the pointer, or
-; moves the caret if it already is. edi = F_TITLE or F_DESC
+; Starts editing the open issue's title or description at the pointer.
+; edi = F_TITLE or F_DESC
 begin_edit:
-    cmp [focus], edi
-    je place_caret
     push rbx
     mov ebx, edi
     mov edi, [detail_issue]
@@ -1419,6 +1433,7 @@ begin_edit:
     mov rdi, rax
     call wrapped_caret_at
     mov [rbx + FD_CURSOR], eax
+    mov [rbx + FD_ANCHOR], eax
 .done:
     pop rbx
     ret
