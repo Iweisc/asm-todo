@@ -204,8 +204,8 @@ lay_message:
     mov r9d, ecx
     mov ecx, eax
     call add_hit
-    lea edx, [ebp - 24]                     ; the strip sits on the header, or the first line
-    mov eax, -2
+    lea edx, [ebp - 6]                      ; the header's baseline, or else the first line's
+    mov eax, LINE_H - 6
     cmp edx, eax
     cmovl edx, eax
     add edx, r13d

@@ -1,7 +1,10 @@
 ; Comments on the open issue: reading them off the wire, the events that add,
 ; change and remove them, editing and deleting your own, and drawing one.
 ; Owners can delete anyone's. Edits and deletions are ops like any other, so
-; they show right away and wait in the queue while offline.
+; they show right away and wait in the queue while offline. Messages share
+; the Edit and Delete links drawn here.
+
+%define ACTIONS_W 96                    ; room for Edit and "Delete?"
 
 section .rodata
 text s_edit,            "Edit"
@@ -299,58 +302,56 @@ comment_rights:
 .done:
     ret
 
-; Edit and Delete at the right of a comment's header, while the pointer is
-; on the comment. Delete turns red and asks once it's been clicked.
-; rdi = view comment, esi = the right edge, edx = header baseline
-draw_comment_actions:
+; edi = A_COMMENT or A_MESSAGE, esi = its id, edx = its image or 0
+; -> eax = 1 if the pointer is on it, its Edit or Delete, or its image
+actions_hovered:
+    xor eax, eax
+    mov ecx, [hover_action]
+    cmp ecx, A_IMAGE
+    je .image
+    sub ecx, edi
+    cmp ecx, 2                              ; itself, its Edit or its Delete
+    ja .done
+    mov edx, esi
+.image:
+    test edx, edx
+    jz .done
+    cmp edx, [hover_arg]
+    sete al
+.done:
+    ret
+
+; Edit and Delete as links ending at a comment's or message's right edge.
+; Delete turns red and asks once it's been clicked. edi = A_COMMENT or
+; A_MESSAGE, whose Edit and Delete actions follow it, esi = its id, edx = the
+; right edge, ecx = the baseline, r8d = 1 to show Edit too, r9d = 1 if Delete is asking
+draw_actions:
     push rbx
     push rbp
     push r12
     push r13
+    push r14
+    push r15
     sub rsp, 8
-    mov rbx, rdi
-    mov r12d, esi
-    mov r13d, edx
-    mov ebp, [rbx + CC_ID]
-    test ebp, ebp
-    jz .done
-    cmp ebp, [editing_comment]
-    je .done
-    cmp ebp, [comment_armed]
-    je .shown
-    mov edi, A_COMMENT
-    mov esi, ebp
-    call hovering
-    test eax, eax
-    jnz .shown
-    mov edi, A_EDIT_COMMENT
-    mov esi, ebp
-    call hovering
-    test eax, eax
-    jnz .shown
-    mov edi, A_DELETE_COMMENT
-    mov esi, ebp
-    call hovering
-    test eax, eax
-    jnz .shown
-    mov esi, [rbx + CC_IMAGE + RI_ID]
-    test esi, esi
-    jz .done
-    mov edi, A_IMAGE
-    call hovering
-    test eax, eax
-    jz .done
-.shown:
-    mov rdi, rbx
-    call comment_rights
-    mov [rsp], edx
-    test eax, eax
-    jz .done
+    mov ebx, edi
+    mov ebp, esi
+    mov r12d, edx
+    mov r13d, ecx
+    mov r14d, r8d
+    mov r15d, r9d
+    ; A message without a header has them on its first line, so blank the
+    ; text under them.
+    lea edi, [r12d - ACTIONS_W]
+    lea esi, [r13d - 15]
+    mov edx, ACTIONS_W
+    mov ecx, 20
+    mov r8d, C_PANEL
+    call fill_rect
     lea rdx, [s_delete_short]
     mov ecx, s_delete_short_len
     mov r8d, C_DIM
-    cmp ebp, [comment_armed]
-    jne .delete
+    test r15d, r15d
+    jz .delete
     lea rdx, [s_delete_sure]
     mov ecx, s_delete_sure_len
     mov r8d, C_DANGER
@@ -361,11 +362,11 @@ draw_comment_actions:
     mov r12d, eax
     mov edi, eax
     mov esi, r13d
-    mov r8d, A_DELETE_COMMENT
+    lea r8d, [ebx + 2]
     mov r9d, ebp
     call add_link_hit
-    cmp dword [rsp], 0
-    je .done
+    test r14d, r14d
+    jz .done
     lea edi, [r12d - 14]
     mov esi, r13d
     lea rdx, [s_edit]
@@ -374,14 +375,57 @@ draw_comment_actions:
     call draw_link
     mov edi, eax
     mov esi, r13d
-    mov r8d, A_EDIT_COMMENT
+    lea r8d, [ebx + 1]
     mov r9d, ebp
     call add_link_hit
 .done:
     add rsp, 8
+    pop r15
+    pop r14
     pop r13
     pop r12
     pop rbp
+    pop rbx
+    ret
+
+; A comment's Edit and Delete, while the pointer is on it or Delete is asking.
+; rdi = view comment, esi = the right edge, edx = the baseline
+draw_comment_actions:
+    push rbx
+    push r12
+    push r13
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    mov esi, [rbx + CC_ID]
+    test esi, esi
+    jz .done
+    cmp esi, [editing_comment]
+    je .done
+    cmp esi, [comment_armed]
+    je .shown
+    mov edi, A_COMMENT
+    mov edx, [rbx + CC_IMAGE + RI_ID]
+    call actions_hovered
+    test eax, eax
+    jz .done
+.shown:
+    mov rdi, rbx
+    call comment_rights
+    test eax, eax
+    jz .done
+    mov r8d, edx
+    mov esi, [rbx + CC_ID]
+    xor r9d, r9d
+    cmp esi, [comment_armed]
+    sete r9b
+    mov edi, A_COMMENT
+    mov edx, r12d
+    mov ecx, r13d
+    call draw_actions
+.done:
+    pop r13
+    pop r12
     pop rbx
     ret
 
