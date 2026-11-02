@@ -138,6 +138,8 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define F_NICK          20              ; a member's nickname, on their page
 %define F_ROLE_NAME     21              ; the role being edited
 %define F_AUTOMOD       22              ; the team's blocked words, one per line
+%define F_DELETE_PASS   23              ; the password that deletes our account
+%define F_DELETE_KEY    24              ; the team's key, typed to delete it
 
 ; Clickable regions
 %define HIT_X           0
@@ -219,6 +221,15 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define A_SLOWMODE      66              ; arg = seconds, in the channel dialog
 %define A_OVERRIDE      67              ; arg = role slot * 4 + CH_* bit number, in the channel dialog
 %define A_NEW_ROLE      68              ; the roles tab's Create role
+%define A_ACCOUNT       69              ; arg = ACC_*, opens the account dialog on that tab
+%define A_ACCOUNT_TAB   70              ; arg = ACC_*, in the account dialog
+%define A_END_SESSION   71              ; arg = session, -1 for every other one
+%define A_DELETE_ACCOUNT 72
+%define A_LEAVE_TEAM    73              ; arg = team id, from the account dialog
+%define A_TEAM_SETTINGS 74              ; arg = team id, switches to it and opens its settings
+%define A_GO_TEAM       75              ; arg = team id, switches to it and closes the dialog
+%define A_TRANSFER      76              ; the member being managed becomes the owner
+%define A_DELETE_TEAM   77
 %define BOX_BUTTONS_W   76              ; what a box's text leaves clear for them
 
 ; Views of a team's issues
@@ -232,10 +243,16 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define M_CREATE        1
 %define M_TEAM          2
 %define M_LABELS        3
-%define M_PASSWORD      4
+%define M_ACCOUNT       4
 %define M_SETTINGS      5
 %define M_CHANNEL       6
 %define M_IMAGE         7
+
+; The account dialog's tabs
+%define ACC_PROFILE     0
+%define ACC_SECURITY    1
+%define ACC_TEAMS       2
+%define ACC_COUNT       3
 
 ; Menus. The first five are one less than the FIELD_* they change.
 %define MK_STATUS       0
@@ -308,6 +325,8 @@ fits FD_ANCHOR, 4, FD_SIZE
 %define CMD_SETTINGS    (CMD_PASSWORD + 1)
 %define CMD_INVITE      (CMD_SETTINGS + 1)
 %define CMD_NEW_CHANNEL (CMD_INVITE + 1)
+%define CMD_ACCOUNT     (CMD_NEW_CHANNEL + 1)
+%define CMD_ALL_TEAMS   (CMD_ACCOUNT + 1)
 %define CMD_ISSUE       0x40000000      ; + issue id, opens it
 
 ; Filter menu values. Labels are ~slot and projects their number.
@@ -374,6 +393,8 @@ fields:
     FIELD nick_buf, NICKNAME_MAX, 0, ST_BODY, s_nick_hint
     FIELD role_name_buf, ROLE_NAME_MAX, 0, ST_BODY, s_role_name_hint
     FIELD automod_buf, AUTOMOD_MAX, FF_MULTILINE, ST_BODY, s_automod_hint
+    FIELD delete_pass_buf, PASSWORD_MAX, FF_MASKED, ST_BODY, s_password
+    FIELD delete_key_buf, TEAM_KEY_MAX, 0, ST_BODY, s_team_key_hint
 
 focus:          dd F_USER
 filter_label:   dd -1                   ; a label slot, or -1

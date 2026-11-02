@@ -1,22 +1,23 @@
-; Team settings, the team's dashboard: its name, then its members, and tabs
-; for its roles, bans, audit log and AutoMod for whoever's permissions get
-; them (access.asm). A member's page (dashboard.asm) changes their
-; nickname and roles, times them out, kicks or bans them, as far as our
-; permissions and rank go. The roles and AutoMod tabs are in rolepage.asm.
-; Everyone can look, search, and leave. Remove, Leave, Kick and Ban ask
-; first, with a second click.
+; Team settings, the team's dashboard: its name, an overview (overview.asm),
+; its members, and tabs for its roles, bans, audit log and AutoMod for
+; whoever's permissions get them (access.asm). A member's page
+; (dashboard.asm) changes their nickname and roles, times them out, kicks or
+; bans them, as far as our permissions and rank go. The roles and AutoMod
+; tabs are in rolepage.asm. Everyone can look, search, and leave. Remove,
+; Leave, Kick and Ban ask first, with a second click.
 
 %define SETTINGS_W      640
 %define MEMBER_ROW_H    44
 %define LIST_ROW_H      52              ; a ban or an audit entry
 %define CONTENT_TOP     190             ; where the tabs' content starts, from the dialog's top
 %define FIELD_ROW_H     44              ; a field above the list
-%define TAB_MEMBERS     0
-%define TAB_ROLES       1
-%define TAB_BANS        2
-%define TAB_AUDIT       3
-%define TAB_AUTOMOD     4
-%define TAB_COUNT       5
+%define TAB_OVERVIEW    0
+%define TAB_MEMBERS     1
+%define TAB_ROLES       2
+%define TAB_BANS        3
+%define TAB_AUDIT       4
+%define TAB_AUTOMOD     5
+%define TAB_COUNT       6
 
 section .rodata
 text s_settings_title,  "Team settings"
@@ -32,11 +33,13 @@ text s_leave_team,      "Leave team"
 text s_leave_sure,      "Leave?"
 text s_timed_out,       "Timed out"
 text s_no_match,        "Nobody on the team has that in their name."
+text s_tab_overview,    "Overview"
 text s_tab_roles,       "Roles"
 text s_tab_bans,        "Bans"
 text s_tab_audit,       "Audit log"
 text s_tab_automod,     "AutoMod"
 text s_search_hint,     "Search members"
+text s_overview_hint,   "Online counts the members who have the team open right now."
 text s_settings_hint,   "Removing someone also unassigns them from the team's issues."
 text s_bans_hint,       "Unbanning lets them be invited again. It doesn't add them back."
 text s_audit_hint,      "The newest 50 changes to the team's members, roles and posts."
@@ -46,17 +49,19 @@ text s_automod_hint,    "Blocked in channels. One per line, * at either end matc
 align 8
 role_names:     NAME s_role_owner       ; by ROLE_* - 1
                 NAME s_role_member
-tab_names:      NAME s_members          ; by TAB_*
+tab_names:      NAME s_tab_overview     ; by TAB_*
+                NAME s_members
                 NAME s_tab_roles
                 NAME s_tab_bans
                 NAME s_tab_audit
                 NAME s_tab_automod
-tab_hints:      NAME s_settings_hint
+tab_hints:      NAME s_overview_hint
+                NAME s_settings_hint
                 NAME s_roles_hint
                 NAME s_bans_hint
                 NAME s_audit_hint
                 NAME s_automod_hint
-tab_perms:      dd 0, PERM_MANAGE_ROLES, PERM_BAN, PERM_VIEW_AUDIT, PERM_MANAGE_AUTOMOD
+tab_perms:      dd 0, 0, PERM_MANAGE_ROLES, PERM_BAN, PERM_VIEW_AUDIT, PERM_MANAGE_AUTOMOD
 
 section .bss
 alignb 4
@@ -100,22 +105,6 @@ tab_shown:
 .done:
     ret
 
-; -> eax = 1 if we get any tab besides the members
-any_tabs:
-    push rbx
-    mov ebx, 1
-.tab:
-    mov edi, ebx
-    call tab_shown
-    test eax, eax
-    jnz .done
-    inc ebx
-    cmp ebx, TAB_COUNT
-    jb .tab
-.done:
-    pop rbx
-    ret
-
 ; rdi = member row -> eax = 1 if they're timed out right now
 member_timed_out:
     push rbx
@@ -139,7 +128,8 @@ role_name:
     mov edx, [role_names + rdi + 8]
     ret
 
-; Opens the dialog on its member list. edi = field to focus
+; Opens the dialog on its overview, or its member list to invite someone.
+; edi = field to focus
 open_team_settings:
     push rbx
     mov ebx, edi
@@ -148,12 +138,17 @@ open_team_settings:
     xor eax, eax
     mov [member_armed], eax
     mov [settings_scroll], eax
-    mov [settings_tab], eax
     mov [managing], eax
+    mov ecx, TAB_MEMBERS                    ; where the invite box is
+    cmp ebx, F_MEMBER
+    cmovne ecx, eax
+    mov [settings_tab], ecx
     mov dword [role_editing], ROLE_LIST
     mov edi, F_SEARCH
     call field_clear
     mov edi, F_REASON
+    call field_clear
+    mov edi, F_DELETE_KEY
     call field_clear
     call current_team_row
     test rax, rax
@@ -746,18 +741,23 @@ draw_field_with_button:
     pop rbx
     ret
 
-; The tabs our permissions get us, the open one underlined. edi = the dialog's x,
-; esi = the tabs' baseline
-draw_settings_tabs:
+; A row of tabs, the open one underlined, as wide as the settings dialog.
+; edi = the dialog's x, esi = the tabs' baseline, rdx = their names, ecx = bit
+; n set to show tab n, r8d = the open tab, r9d = the action, whose arg is the tab
+draw_tab_strip:
     push rbx
     push rbp
     push r12
     push r13
     push r14
     push r15
-    sub rsp, 8
+    sub rsp, 24
     mov ebx, edi
     mov r12d, esi
+    mov [rsp], rdx
+    mov [rsp + 8], ecx
+    mov [rsp + 12], r8d
+    mov [rsp + 16], r9d
     lea edi, [ebx + 28]
     lea esi, [r12d + 11]
     mov edx, SETTINGS_W - 56
@@ -767,33 +767,32 @@ draw_settings_tabs:
     lea r13d, [ebx + 28]                    ; the next tab's x
     xor ebp, ebp
 .tab:
-    mov edi, ebp
-    call tab_shown
-    test eax, eax
-    jz .next
+    bt dword [rsp + 8], ebp
+    jnc .next
     mov r14d, ebp
     shl r14d, 4
-    mov rdi, [tab_names + r14]
-    mov esi, [tab_names + r14 + 8]
+    add r14, [rsp]                          ; its name
+    mov rdi, [r14]
+    mov esi, [r14 + 8]
     mov edx, ST_MEDIUM
     call text_width
     mov r15d, eax
-    mov edi, A_TAB
+    mov edi, [rsp + 16]
     mov esi, ebp
     call hovering
     mov r8d, INK(C_DIM, ST_MEDIUM)
     mov ecx, INK(C_TEXT, ST_MEDIUM)
-    cmp ebp, [settings_tab]
+    cmp ebp, [rsp + 12]
     sete dl
     or al, dl
     test al, al
     cmovnz r8d, ecx
     mov edi, r13d
     mov esi, r12d
-    mov rdx, [tab_names + r14]
-    mov ecx, [tab_names + r14 + 8]
+    mov rdx, [r14]
+    mov ecx, [r14 + 8]
     call draw_text
-    cmp ebp, [settings_tab]
+    cmp ebp, [rsp + 12]
     jne .hit
     mov edi, r13d
     lea esi, [r12d + 10]
@@ -806,15 +805,18 @@ draw_settings_tabs:
     lea esi, [r12d - 18]
     mov edx, r15d
     mov ecx, 30
-    mov r8d, A_TAB
+    mov r8d, [rsp + 16]
     mov r9d, ebp
     call add_hit
     lea r13d, [r13d + r15d + 24]
 .next:
     inc ebp
-    cmp ebp, TAB_COUNT
-    jb .tab
-    add rsp, 8
+    mov eax, [rsp + 8]
+    mov ecx, ebp
+    shr eax, cl
+    test eax, eax
+    jnz .tab
+    add rsp, 24
     pop r15
     pop r14
     pop r13
@@ -823,7 +825,42 @@ draw_settings_tabs:
     pop rbx
     ret
 
-; The title, the team's name, and the tabs if we get any besides the members.
+; The tabs our permissions get us. edi = the dialog's x, esi = the tabs' baseline
+draw_settings_tabs:
+    push rbx
+    push r12
+    push r13
+    push r14
+    sub rsp, 8
+    mov r12d, edi
+    mov r13d, esi
+    xor ebx, ebx
+    xor r14d, r14d                          ; the tabs shown
+.tab:
+    mov edi, ebx
+    call tab_shown
+    test eax, eax
+    jz .next
+    bts r14d, ebx
+.next:
+    inc ebx
+    cmp ebx, TAB_COUNT
+    jb .tab
+    mov edi, r12d
+    mov esi, r13d
+    lea rdx, [tab_names]
+    mov ecx, r14d
+    mov r8d, [settings_tab]
+    mov r9d, A_TAB
+    call draw_tab_strip
+    add rsp, 8
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+; The title, the team's name, and the tabs.
 ; edi = the dialog's x, esi = its y
 draw_settings_head:
     push rbx
@@ -867,21 +904,9 @@ draw_settings_head:
     mov r8d, INK(C_TEXT, ST_BODY)
     call draw_text
 .tabs:
-    call any_tabs
-    test eax, eax
-    jz .heading
     mov edi, ebx
     lea esi, [r12d + 166]
     call draw_settings_tabs
-    jmp .done
-.heading:
-    lea edi, [ebx + 28]
-    lea esi, [r12d + 166]
-    lea rdx, [s_members]
-    mov ecx, s_members_len
-    mov r8d, INK(C_DIM, ST_SMALL)
-    call draw_text
-.done:
     pop r13
     pop r12
     pop rbx
@@ -929,6 +954,8 @@ settings_layout:
     push rbx
     mov ebx, CONTENT_TOP
     mov eax, [settings_tab]
+    cmp eax, TAB_OVERVIEW
+    je .overview
     cmp eax, TAB_ROLES
     je .roles
     cmp eax, TAB_AUTOMOD
@@ -952,6 +979,10 @@ settings_layout:
     jz .done
     mov rdi, rax
     call page_height
+    mov edx, eax
+    jmp .done
+.overview:
+    call overview_height
     mov edx, eax
     jmp .done
 .roles:
@@ -984,6 +1015,8 @@ draw_settings_body:
     mov ebx, edi
     mov r12d, esi
     mov eax, [settings_tab]
+    cmp eax, TAB_OVERVIEW
+    je .overview
     cmp eax, TAB_ROLES
     je .roles
     cmp eax, TAB_AUTOMOD
@@ -1007,6 +1040,11 @@ draw_settings_body:
     mov edi, ebx
     mov esi, r12d
     call draw_member_list
+    jmp .done
+.overview:
+    mov edi, ebx
+    mov esi, r12d
+    call draw_overview
     jmp .done
 .roles:
     mov edi, ebx
@@ -1033,30 +1071,14 @@ draw_settings_body:
     pop rbx
     ret
 
-; The tab's hint at the bottom. Without tabs there's only the list, so none.
-; edi = x, esi = baseline
+; The tab's hint at the bottom. edi = x, esi = baseline
 draw_settings_hint:
-    push rbx
-    push r12
-    sub rsp, 8
-    mov ebx, edi
-    mov r12d, esi
-    call any_tabs
-    test eax, eax
-    jz .done
     mov eax, [settings_tab]
     shl eax, 4
-    mov edi, ebx
-    mov esi, r12d
     mov rdx, [tab_hints + rax]
     mov ecx, [tab_hints + rax + 8]
     mov r8d, INK(C_FAINT, ST_SMALL)
-    call draw_text
-.done:
-    add rsp, 8
-    pop r12
-    pop rbx
-    ret
+    jmp draw_text
 
 ; The dialog. Its list or page scrolls when the window can't fit it.
 draw_team_settings:

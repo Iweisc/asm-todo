@@ -1,8 +1,8 @@
 ; The moderation half of team settings: a member's page with their
-; nickname, roles, timeouts, Kick and Ban, the ban list and the audit log.
-; The server sends the bans and the log only to those whose permissions get
-; them, and decides who may do what to whom. access.asm mirrors it so we
-; only offer what it will take.
+; nickname, roles, timeouts, Transfer ownership, Kick and Ban, and the ban
+; list. The audit log is in audit.asm. The server sends the bans only to
+; those whose permissions get them, and decides who may do what to whom.
+; access.asm mirrors it so we only offer what it will take.
 
 ; A ban, as MSG_BANS lists it.
 %define BN_USER         0
@@ -14,24 +14,6 @@
 %define BN_SIZE         144
 fits BN_NAME, USERNAME_MAX, BN_REASON_LEN
 fits BN_REASON, REASON_MAX, BN_SIZE
-
-; An audit entry, as MSG_AUDIT lists it.
-%define AL_KIND         0               ; u8, AU_*
-%define AL_ACTOR        4
-%define AL_TARGET       8
-%define AL_AT           12
-%define AL_EXTRA        16
-%define AL_ACTOR_LEN    20
-%define AL_ACTOR_NAME   21              ; USERNAME_MAX bytes
-%define AL_TARGET_LEN   53
-%define AL_TARGET_NAME  54              ; USERNAME_MAX bytes
-%define AL_REASON_LEN   86
-%define AL_REASON       87              ; REASON_MAX bytes
-%define AL_SIZE         188
-fits AL_KIND, 1, AL_ACTOR
-fits AL_ACTOR_NAME, USERNAME_MAX, AL_TARGET_LEN
-fits AL_TARGET_NAME, USERNAME_MAX, AL_REASON_LEN
-fits AL_REASON, REASON_MAX, AL_SIZE
 
 %define OPTION_X        120             ; where a page row's options start, past its label
 %define SWITCH_ROW_H    30              ; a role on a member's page
@@ -45,6 +27,8 @@ fits AL_REASON, REASON_MAX, AL_SIZE
 %define PG_HISTORY      32
 %define PG_KICK         64
 %define PG_BAN          128
+%define PG_TRANSFER     256
+%define PG_BUTTONS      (PG_KICK | PG_BAN | PG_TRANSFER)
 
 section .rodata
 text s_back,            "Back to members"
@@ -61,8 +45,6 @@ text s_keep_messages,   "None of their messages"
 text s_last_hour,       "Last hour"
 text s_last_day,        "Last day"
 text s_last_week,       "Last 7 days"
-text s_deleting,        ", deleting "
-text s_of_messages,     " of their messages"
 text s_timeout_label,   "Timeout"
 text s_reason_label,    "Reason"
 text s_reason_hint,     "Optional, shown in the audit log"
@@ -71,10 +53,11 @@ text s_kick,            "Kick"
 text s_kick_sure,       "Kick?"
 text s_ban,             "Ban"
 text s_ban_sure,        "Ban?"
+text s_transfer,        "Transfer ownership"
+text s_transfer_sure,   "Transfer ownership?"
 text s_unban,           "Unban"
 text s_banned_on,       "Banned "
 text s_no_bans,         "Nobody's banned from this team."
-text s_no_audit,        "Nothing's happened yet."
 text s_for,             " for "
 text s_mins,            " mins"
 text s_60_secs,         "60 secs"
@@ -83,25 +66,6 @@ text s_10_mins,         "10 mins"
 text s_1_hour,          "1 hour"
 text s_1_day,           "1 day"
 text s_1_week,          "1 week"
-text v_invited,         " invited "
-text v_removed,         " removed "
-text v_banned,          " banned "
-text v_unbanned,        " unbanned "
-text v_timed_out,       " timed out "
-text v_ended,           " ended the timeout of "
-text v_made,            " made "
-text v_deleted_message, " deleted a message by "
-text v_deleted_comment, " deleted a comment by "
-text v_renamed,         " renamed the team"
-text v_saved_role,      " changed the role "
-text v_deleted_role,    " deleted the role "
-text v_member_roles,    " changed the roles of "
-text v_nickname,        " changed the nickname of "
-text v_channel,         " changed the settings of "
-text v_automod,         " changed the AutoMod rules"
-text v_automod_block,   " had a message blocked by AutoMod"
-text s_an_owner,        " an owner"
-text s_a_member,        " a member"
 text s_everyone,        "@everyone"
 text middot_sep,        " ", GLYPH_MIDDOT, " "
 
@@ -112,10 +76,6 @@ TIMEOUT_PRESETS equ ($ - timeout_secs) / 4
 history_secs:   dd 0, 3600, 86400, BAN_HISTORY_MAX
 HISTORY_PRESETS equ ($ - history_secs) / 4
 role_order:     db ROLE_OWNER, ROLE_MEMBER
-; What follows the verb in an audit entry, by AU_* - 1: 0 the target, 1
-; nothing, 2 the reason, which is a role's name, 3 the channel
-audit_objects:  db 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 2, 0, 0, 3, 1, 1
-AUDIT_KINDS     equ $ - audit_objects
 align 8
 history_names:  NAME s_keep_messages
                 NAME s_last_hour
@@ -127,32 +87,11 @@ timeout_names:  NAME s_60_secs
                 NAME s_1_hour
                 NAME s_1_day
                 NAME s_1_week
-audit_verbs:    NAME v_invited          ; by AU_* - 1
-                NAME v_removed
-                NAME v_banned
-                NAME v_unbanned
-                NAME v_timed_out
-                NAME v_ended
-                NAME v_made
-                NAME v_deleted_message
-                NAME v_deleted_comment
-                NAME v_renamed
-                NAME v_saved_role
-                NAME v_deleted_role
-                NAME v_member_roles
-                NAME v_nickname
-                NAME v_channel
-                NAME v_automod
-                NAME v_automod_block
-role_articles:  NAME s_an_owner         ; by ROLE_* - 1
-                NAME s_a_member
 
 section .bss
 alignb 4
 ban_count:      resd 1
 ban_rows:       resb TEAM_BAN_MAX * BN_SIZE
-audit_count:    resd 1
-audit_rows:     resb AUDIT_SHOWN * AL_SIZE
 reason_buf:     resb REASON_MAX
 nick_buf:       resb NICKNAME_MAX
 ban_history:    resd 1                  ; seconds of their messages Ban deletes
@@ -192,60 +131,6 @@ on_bans:
     jmp .ban
 .read:
     mov [ban_count], r12d
-    jmp .done
-.bad:
-    mov byte [rd_bad], 1
-    jmp .done
-.skip:
-    call rd_skip
-.done:
-    pop r13
-    pop r12
-    pop rbx
-    ret
-
-; MSG_AUDIT: the newest of the current team's audit log, newest first.
-on_audit:
-    push rbx
-    push r12
-    push r13
-    call rd_u32
-    mov ebx, eax
-    call rd_u8
-    mov r12d, eax
-    cmp ebx, [current_team]
-    jne .skip
-    cmp r12d, AUDIT_SHOWN
-    ja .bad
-    lea rbx, [audit_rows]
-    xor r13d, r13d
-.entry:
-    cmp r13d, r12d
-    jae .read
-    call rd_u8
-    mov [rbx + AL_KIND], al
-    call rd_u32
-    mov [rbx + AL_ACTOR], eax
-    call rd_u32
-    mov [rbx + AL_TARGET], eax
-    call rd_u32
-    mov [rbx + AL_AT], eax
-    call rd_u32
-    mov [rbx + AL_EXTRA], eax
-    lea rdi, [rbx + AL_ACTOR_LEN]
-    mov esi, USERNAME_MAX
-    call read_named_str
-    lea rdi, [rbx + AL_TARGET_LEN]
-    mov esi, USERNAME_MAX
-    call read_named_str
-    lea rdi, [rbx + AL_REASON_LEN]
-    mov esi, REASON_MAX
-    call read_named_str
-    add rbx, AL_SIZE
-    inc r13d
-    jmp .entry
-.read:
-    mov [audit_count], r12d
     jmp .done
 .bad:
     mov byte [rd_bad], 1
@@ -405,6 +290,30 @@ moderate_managed:
     call field_clear
 .done:
     pop rbx
+    ret
+
+; Transfer ownership on a member's page: they become the owner and we a
+; member. The first click asks.
+click_transfer:
+    sub rsp, 8
+    mov edi, [managing]
+    mov esi, A_TRANSFER
+    call confirm_member
+    test eax, eax
+    jz .done
+    call require_online
+    test eax, eax
+    jz .done
+    lea rdi, [out_msg]
+    mov esi, MSG_TRANSFER_OWNER
+    call wr_u8
+    mov esi, [current_team]
+    call wr_u32
+    mov esi, [managing]
+    call wr_u32
+    call send_built
+.done:
+    add rsp, 8
     ret
 
 ; Gives the member being managed a role, or takes it away. edi = role slot
@@ -845,8 +754,8 @@ draw_timeout_options:
     pop rbx
     ret
 
-; Kick and Ban, each asking with a second click. edi = x, esi = y,
-; edx = user id, ecx = PG_KICK and PG_BAN as their page has them
+; Kick, Ban and Transfer ownership, each asking with a second click.
+; edi = x, esi = y, edx = user id, ecx = the PG_BUTTONS their page has
 draw_page_buttons:
     push rbx
     push r12
@@ -876,7 +785,7 @@ draw_page_buttons:
     lea ebx, [ebx + eax + 8]
 .no_kick:
     test r14d, PG_BAN
-    jz .done
+    jz .no_ban
     lea rdx, [s_ban]
     mov ecx, s_ban_len
     cmp r13d, [member_armed]
@@ -890,6 +799,24 @@ draw_page_buttons:
     mov esi, r12d
     mov r8d, A_BAN
     mov r9d, BTN_DANGER
+    call draw_button
+    lea ebx, [ebx + eax + 8]
+.no_ban:
+    test r14d, PG_TRANSFER
+    jz .done
+    lea rdx, [s_transfer]
+    mov ecx, s_transfer_len
+    cmp r13d, [member_armed]
+    jne .transfer
+    cmp dword [armed_action], A_TRANSFER
+    jne .transfer
+    lea rdx, [s_transfer_sure]
+    mov ecx, s_transfer_sure_len
+.transfer:
+    mov edi, ebx
+    mov esi, r12d
+    mov r8d, A_TRANSFER
+    xor r9d, r9d
     call draw_button
 .done:
     add rsp, 8
@@ -959,9 +886,13 @@ page_sections:
     and eax, PG_ROLES
     or r12d, eax
     call am_owner
-    neg eax
-    and eax, PG_OWNER
-    or r12d, eax
+    test eax, eax
+    jz .moderation
+    or r12d, PG_OWNER
+    cmp byte [rbx + CM_ROLE], ROLE_OWNER
+    je .moderation
+    or r12d, PG_TRANSFER
+.moderation:
     mov rdi, rbx
     mov esi, PERM_KICK
     call may_act_on
@@ -1025,7 +956,7 @@ page_height:
     jz .buttons
     add ecx, 32
 .buttons:
-    test eax, PG_KICK | PG_BAN
+    test eax, PG_BUTTONS
     jz .done
     add ecx, 40
 .done:
@@ -1141,7 +1072,7 @@ draw_member_page:
     call draw_history_options
     add r14d, 32
 .buttons:
-    test r15d, PG_KICK | PG_BAN
+    test r15d, PG_BUTTONS
     jz .done
     lea edi, [ebx + OPTION_X]
     lea esi, [r14d - 18]
@@ -1262,205 +1193,3 @@ put_duration:
     mov rsi, [timeout_names + rax]
     mov edx, [timeout_names + rax + 8]
     jmp put_mem
-
-; What follows the target in an entry: how long a timeout was for, what
-; someone was made, or how much of a banned member's messages went.
-; rdi = cursor, rsi = entry -> rdi advanced
-put_audit_suffix:
-    movzx eax, byte [rsi + AL_KIND]
-    mov ecx, [rsi + AL_EXTRA]
-    cmp eax, AU_ROLE
-    je .role
-    cmp eax, AU_BAN
-    je .ban
-    cmp eax, AU_TIMEOUT
-    jne .done
-    push rcx
-    lea rsi, [s_for]
-    mov edx, s_for_len
-    call put_mem
-    pop rcx
-    jmp put_duration
-.role:
-    dec ecx
-    cmp ecx, ROLE_MEMBER - 1
-    ja .done
-    shl ecx, 4
-    mov rsi, [role_articles + rcx]
-    mov edx, [role_articles + rcx + 8]
-    jmp put_mem
-.ban:
-    test ecx, ecx
-    jz .done
-    push rcx
-    lea rsi, [s_deleting]
-    mov edx, s_deleting_len
-    call put_mem
-    pop rcx
-    call put_duration
-    lea rsi, [s_of_messages]
-    mov edx, s_of_messages_len
-    jmp put_mem
-.done:
-    ret
-
-; What an entry's verb acts on, when it isn't a member: a role's name,
-; @everyone, or a channel. rdi = cursor, rsi = entry -> rdi advanced
-put_audit_object:
-    movzx eax, byte [rsi + AL_KIND]
-    movzx eax, byte [audit_objects + rax - 1]
-    cmp eax, 3
-    je .channel
-    cmp dword [rsi + AL_EXTRA], 0
-    je .everyone
-.reason:
-    movzx edx, byte [rsi + AL_REASON_LEN]
-    lea rsi, [rsi + AL_REASON]
-    jmp put_mem
-.everyone:
-    cmp byte [rsi + AL_KIND], AU_SAVE_ROLE
-    jne .reason                             ; a deleted role's slot isn't kept
-    lea rsi, [s_everyone]
-    mov edx, s_everyone_len
-    jmp put_mem
-.channel:
-    mov byte [rdi], '#'
-    inc rdi
-    cmp dword [rsi + AL_EXTRA], 0
-    jne .reason
-    lea rsi, [s_general + 1]                ; it has its own "#"
-    mov edx, s_general_len - 1
-    jmp put_mem
-
-; One audit entry: "maya banned sam" and when, and why if they said.
-; edi = x, esi = top, rdx = entry
-draw_audit_row:
-    push rbx
-    push r12
-    push r13
-    push r14
-    sub rsp, 8
-    mov ebx, edi
-    mov r12d, esi
-    mov r13, rdx
-    movzx r14d, byte [r13 + AL_KIND]
-    dec r14d
-    cmp r14d, AUDIT_KINDS - 1
-    ja .done                                ; a kind newer than us
-    shl r14d, 4
-    lea edi, [ebx + 28]
-    lea esi, [r12d + 14]
-    mov edx, 24
-    mov ecx, [r13 + AL_ACTOR]
-    lea r8, [r13 + AL_ACTOR_NAME]
-    call draw_avatar
-    lea edi, [ebx + 62]
-    lea esi, [r12d + 24]
-    lea rdx, [r13 + AL_ACTOR_NAME]
-    movzx ecx, byte [r13 + AL_ACTOR_LEN]
-    mov r8d, INK(C_TEXT, ST_MEDIUM)
-    call draw_text
-    mov edi, eax
-    lea esi, [r12d + 24]
-    mov rdx, [audit_verbs + r14]
-    mov ecx, [audit_verbs + r14 + 8]
-    mov r8d, INK(C_DIM, ST_BODY)
-    call draw_text
-    movzx ecx, byte [r13 + AL_KIND]
-    movzx ecx, byte [audit_objects + rcx - 1]
-    cmp ecx, 1
-    je .when
-    ja .object
-    mov edi, eax
-    lea esi, [r12d + 24]
-    lea rdx, [r13 + AL_TARGET_NAME]
-    movzx ecx, byte [r13 + AL_TARGET_LEN]
-    mov r8d, INK(C_TEXT, ST_MEDIUM)
-    call draw_text
-    mov r14d, eax
-    lea rdi, [scratch]
-    mov rsi, r13
-    call put_audit_suffix
-    mov rcx, rdi
-    mov edi, r14d
-    lea esi, [r12d + 24]
-    mov r8d, INK(C_DIM, ST_BODY)
-    call draw_scratch
-    jmp .when
-.object:
-    mov r14d, eax
-    lea rdi, [scratch]
-    mov rsi, r13
-    call put_audit_object
-    mov rcx, rdi
-    mov edi, r14d
-    lea esi, [r12d + 24]
-    mov r8d, INK(C_TEXT, ST_MEDIUM)
-    call draw_scratch
-.when:
-    lea rdi, [scratch]
-    mov esi, [r13 + AL_AT]
-    call put_ago
-    movzx eax, byte [r13 + AL_KIND]
-    cmp byte [audit_objects + rax - 1], 2
-    jae .line                               ; the reason was the object
-    cmp byte [r13 + AL_REASON_LEN], 0
-    je .line
-    call put_middot
-    lea rsi, [r13 + AL_REASON]
-    movzx edx, byte [r13 + AL_REASON_LEN]
-    call put_mem
-.line:
-    lea rdx, [scratch]
-    mov rcx, rdi
-    sub rcx, rdx
-    lea edi, [ebx + 62]
-    lea esi, [r12d + 42]
-    mov r8d, INK(C_FAINT, ST_SMALL)
-    mov r9d, SETTINGS_W - 62 - 28
-    call draw_text_fit
-.done:
-    add rsp, 8
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    ret
-
-; The audit log, newest first, or a line saying it's empty. edi = x, esi = top
-draw_audit:
-    push rbx
-    push r12
-    push r13
-    push r14
-    sub rsp, 8
-    mov ebx, edi
-    mov r12d, esi
-    mov r13d, [audit_count]
-    test r13d, r13d
-    jz .none
-    lea r14, [audit_rows]
-.entry:
-    mov edi, ebx
-    mov esi, r12d
-    mov rdx, r14
-    call draw_audit_row
-    add r12d, LIST_ROW_H
-    add r14, AL_SIZE
-    dec r13d
-    jnz .entry
-    jmp .done
-.none:
-    lea edi, [ebx + 28]
-    lea esi, [r12d + 26]
-    lea rdx, [s_no_audit]
-    mov ecx, s_no_audit_len
-    mov r8d, INK(C_DIM, ST_BODY)
-    call draw_text
-.done:
-    add rsp, 8
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    ret

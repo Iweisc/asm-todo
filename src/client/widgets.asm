@@ -118,9 +118,12 @@ put_issue_id:
     pop rbx
     ret
 
-; rdi = cursor, esi = unix seconds -> rdi advanced past "Nov 1", the local date
-put_date:
+; esi = unix seconds -> eax = the local year, edx = month, 0 for January,
+; ecx = day of the month
+civil_date:
     push rbx
+    push r12
+    sub rsp, 8
     mov eax, esi
     add eax, [tz_offset]
     xor edx, edx
@@ -131,6 +134,7 @@ put_date:
     xor edx, edx
     mov ecx, 146097
     div ecx
+    imul r12d, eax, 400                     ; the era's first year, from March
     mov eax, edx                            ; day of the era
     mov ebx, eax
     xor edx, edx
@@ -152,6 +156,7 @@ put_date:
     xor edx, edx
     mov ecx, 365
     div ecx                                 ; year of the era
+    add r12d, eax
     mov r8d, eax
     imul r9d, r8d, 365
     shr eax, 2
@@ -173,13 +178,25 @@ put_date:
     mov ecx, 5
     div ecx
     sub ebx, eax
-    inc ebx                                 ; day of the month
-    lea eax, [r8d + 2]                      ; month index from January
+    lea ecx, [ebx + 1]                      ; day of the month
+    lea edx, [r8d + 2]
     cmp r8d, 10
-    jb .month
-    lea eax, [r8d - 10]
-.month:
-    lea eax, [eax * 2 + eax]
+    jb .year
+    lea edx, [r8d - 10]                     ; January and February count in the next year
+    inc r12d
+.year:
+    mov eax, r12d
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
+; rdi = cursor, esi = unix seconds -> rdi advanced past "Nov 1", the local date
+put_date:
+    push rbx
+    call civil_date
+    mov ebx, ecx
+    lea eax, [edx * 2 + edx]
     lea rsi, [months + rax]
     mov edx, 3
     call put_mem
@@ -187,6 +204,24 @@ put_date:
     inc rdi
     mov esi, ebx
     call put_u32
+    pop rbx
+    ret
+
+; rdi = cursor, esi = unix seconds -> rdi advanced past "Nov 1, 2026"
+put_full_date:
+    push rbx
+    push r12
+    sub rsp, 8
+    mov r12d, esi
+    call put_date
+    mov esi, r12d
+    call civil_date
+    mov word [rdi], ', '
+    add rdi, 2
+    mov esi, eax
+    call put_u32
+    add rsp, 8
+    pop r12
     pop rbx
     ret
 

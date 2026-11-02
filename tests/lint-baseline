@@ -15,15 +15,12 @@ nocomment src/client/net.asm net_readable
 nocomment src/client/sync.asm on_ack
 nocomment src/client/sync.asm on_auth_fail
 nocomment src/client/sync.asm on_auth_ok
-nocomment src/client/sync.asm on_error
-nocomment src/client/sync.asm on_logged_out
 nocomment src/client/sync.asm on_members
 nocomment src/client/sync.asm on_snapshot
 nocomment src/client/sync.asm on_team_meta
 nocomment src/client/sync.asm on_teams
 nocomment src/client/sync.asm pop_pending
 nocomment src/client/sync.asm send_subscribe
-nocomment src/client/sync.asm sync_on_offline
 nocomment src/client/sync.asm sync_on_open
 nocomment src/client/ui.asm ui_layout_changed
 nocomment src/client/views.asm draw_create
@@ -41,9 +38,7 @@ nocomment src/server/conn.asm conn_accept_all
 nocomment src/server/conn.asm update_now
 nocomment src/server/db.asm open_journal
 nocomment src/server/handlers.asm h_login
-nocomment src/server/handlers.asm h_logout
 nocomment src/server/handlers.asm h_register
-nocomment src/server/handlers.asm h_resume
 nocomment src/server/handlers.asm kill_cur
 nocomment src/server/issues.asm h_subscribe
 nocomment src/server/issues.asm op_comment

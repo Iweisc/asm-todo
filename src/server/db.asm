@@ -27,6 +27,7 @@
 %define USER_NAME       5               ; USERNAME_MAX bytes
 %define USER_SALT       40              ; 16 bytes
 %define USER_HASH       56              ; PBKDF2 output, 32 bytes
+%define USER_CREATED    88              ; unix seconds, 0 for users from before version 6
 %define USER_SIZE       96
 
 ; Labels and projects live inside their team's row. A slot with an empty
@@ -89,7 +90,8 @@
 %define SESS_HASH       0
 %define SESS_USER       32
 %define SESS_LAST_OP    36              ; highest op number applied for this session
-%define SESS_EXPIRES    40              ; unix seconds
+%define SESS_EXPIRES    40              ; unix seconds, SESSION_DAYS after it started
+%define SESS_SEEN       44              ; unix seconds it last logged in or resumed, 0 before version 6
 %define SESS_SIZE       48
 %define SESSION_DAYS    30
 
@@ -115,7 +117,8 @@ fits MEM_ROLE, 1, MEM_ROLES
 fits MEM_ROLES, 2, MEM_TIMEOUT
 fits MEM_TIMEOUT, 4, MEM_SIZE
 fits USER_SALT, 16, USER_HASH
-fits USER_HASH, 32, USER_SIZE
+fits USER_HASH, 32, USER_CREATED
+fits USER_CREATED, 4, USER_SIZE
 fits LABEL_NAME, LABEL_NAME_MAX, LABEL_SIZE
 fits PROJ_NAME, PROJECT_NAME_MAX, PROJ_SIZE
 fits TEAM_KEY, TEAM_KEY_MAX, TEAM_NAME_LEN
@@ -127,6 +130,8 @@ fits ISS_DESC, DESC_MAX, ISSUE_SIZE
 fits CMT_TEXT, COMMENT_MAX, CMT_EDITED
 fits CMT_EDITED, 1, CMT_SIZE
 fits SESS_HASH, 32, SESS_USER
+fits SESS_EXPIRES, 4, SESS_SEEN
+fits SESS_SEEN, 4, SESS_SIZE
 fits MS_LEN, 2, MS_TEXT
 fits MS_TEXT, MESSAGE_MAX, MS_EDITED
 fits MS_EDITED, 1, MS_SIZE
@@ -261,9 +266,11 @@ fits AM_WORDS, AUTOMOD_MAX, AM_SIZE
 ; after that. Version 5 gave members MEM_TIMEOUT and MEM_ROLES, in bytes that
 ; were always zero, MEM_ROLE was a u32 whose high bytes were zero, and it
 ; added the bans, audit, roles, channel settings, nicknames and AutoMod
-; tables. Older files load as they are,
-; without the tables they're older than, and get saved as version 5.
-%define DB_VERSION      5
+; tables. Version 6 gave users USER_CREATED in bytes that were always zero,
+; and SESS_EXPIRES was a u64 whose high half, now SESS_SEEN, was zero.
+; Older files load as they are, without the tables they're older than, and
+; get saved as version 6.
+%define DB_VERSION      6
 %define DB_VERSION_MIN  1
 %define DB_HEADER       96
 %define HEADER_LOGGED   64              ; the part without the private key
@@ -1118,6 +1125,45 @@ count_where:
     dec ecx
     jmp .row
 .done:
+    pop rbx
+    ret
+
+; Frees every row whose u32 at an offset equals a value, which is never 0.
+; edi = table, esi = offset, edx = value
+free_where:
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    test edx, edx
+    jz .done
+    mov r12d, edi
+    mov r13d, esi
+    mov r14d, edx
+    shl edi, 5
+    lea rbp, [db_tables + rdi]
+    mov rbx, [rbp]
+.row:
+    mov rax, [rbp + 8]
+    mov eax, [rax]
+    imul rax, [rbp + 16]
+    add rax, [rbp]
+    cmp rbx, rax
+    jae .done
+    cmp [rbx + r13], r14d
+    jne .next
+    mov edi, r12d
+    mov rsi, rbx
+    call free_row
+.next:
+    add rbx, [rbp + 16]
+    jmp .row
+.done:
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
     pop rbx
     ret
 

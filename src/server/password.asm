@@ -83,8 +83,12 @@ h_change_password:
     pop rbx
     ret
 
-; One of the two jobs finished, for cur. -> eax = 1 if the second one started
+; One of the two jobs finished, for cur, or the check before deleting the
+; account. -> eax = 1 if the second one started
 finish_password_job:
+    mov rax, [cur]
+    cmp byte [rax + C_JOB_KIND], JOB_DELETE_ACCOUNT
+    je finish_delete_account
     push rbx
     push r12
     sub rsp, 8

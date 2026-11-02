@@ -2532,9 +2532,9 @@ draw_app:
     call draw_labels_modal
     jmp .done
 .password_modal:
-    cmp byte [modal], M_PASSWORD
+    cmp byte [modal], M_ACCOUNT
     jne .settings_modal
-    call draw_password_modal
+    call draw_account_dialog
     jmp .done
 .settings_modal:
     cmp byte [modal], M_SETTINGS

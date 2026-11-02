@@ -86,6 +86,9 @@ moderation_tests:
     call check
 
     call frame
+    mov edi, A_TAB
+    mov esi, TAB_MEMBERS
+    call click_hit
     xor ebx, ebx
     mov edi, A_MANAGE
     mov esi, 2

@@ -371,12 +371,13 @@ sync_on_open:
     mov byte [need_redraw], 1
     ret
 
+; The connection went: nothing that was waiting on an answer gets one.
 sync_on_offline:
     call images_offline
     call attach_failed
+    call account_idle
     mov byte [authed], 0
     mov byte [auth_busy], 0
-    mov byte [password_busy], 0
     mov byte [need_redraw], 1
     cmp byte [auth_queued], 0
     je .done
@@ -395,7 +396,7 @@ sync_on_message:
     call rd_begin
     call rd_u8
     sub eax, MSG_AUTH_OK
-    cmp eax, MSG_AUTOMOD - MSG_AUTH_OK
+    cmp eax, MSG_ACCOUNT - MSG_AUTH_OK
     ja .bad
     lea rcx, [.table]
     call [rcx + rax * 8]
@@ -415,7 +416,7 @@ sync_on_message:
     dq on_ack, on_members, on_logged_out, on_team_meta, on_issue_detail
     dq on_chat, on_chat_history, on_unread, on_password_changed, on_channels
     dq on_chat_edited, on_chat_deleted, on_image, on_upload_ready, on_bans, on_audit
-    dq on_roles, on_automod
+    dq on_roles, on_automod, on_account
 
 on_auth_ok:
     push rbx
@@ -489,17 +490,23 @@ on_auth_fail:
 .done:
     ret
 
+; MSG_ERROR: shown in the footer. It's likely the answer to a password
+; change, an account deletion or an upload, so those stop waiting.
 on_error:
     sub rsp, 8
-    mov byte [password_busy], 0             ; the likely answer to a change
-    call attach_failed                      ; or to an upload
+    call account_idle
+    call attach_failed
     call rd_str
     add rsp, 8
     mov rsi, rax
     jmp set_status
 
+; MSG_LOGGED_OUT: back to the login screen.
 on_logged_out:
-    jmp sync_reset
+    sub rsp, 8
+    call sync_reset
+    add rsp, 8
+    jmp account_logged_out
 
 ; rdi = destination, esi = max length. Reads a str into a u8 length then bytes.
 read_named_str:

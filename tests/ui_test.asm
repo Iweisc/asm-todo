@@ -48,13 +48,16 @@ global _start
 %include "chat.asm"
 %include "comments.asm"
 %include "labels.asm"
-%include "account.asm"
 %include "dialogs.asm"
 %include "keymap.asm"
 %include "access.asm"
 %include "members.asm"
 %include "dashboard.asm"
 %include "rolepage.asm"
+%include "audit.asm"
+%include "overview.asm"
+%include "account.asm"
+%include "accountpage.asm"
 %include "channel.asm"
 %include "chatedit.asm"
 %include "undo.asm"
@@ -212,6 +215,8 @@ _start:
     call channel_settings_tests
     call automod_tests
     call controls_tests
+    call account_tests
+    call team_dashboard_tests
     xor edi, edi
     cmp dword [failures], 0
     setne dil
@@ -885,10 +890,11 @@ labels_tests:
     add rsp, 8
     ret
 
-; The change password dialog keeps nothing once it's gone.
+; The account dialog's password boxes keep nothing once it's gone.
 password_tests:
     push rbx
-    call open_password_modal
+    mov edi, ACC_SECURITY
+    call open_account
     mov edi, F_OLD_PASS
     lea rsi, [t_hello]
     call type_into
@@ -1004,11 +1010,12 @@ zone_at:
     mov esi, t_zone_len
     jmp tz_parse
 
-; The server logs us out with the change password dialog half filled in.
+; The server logs us out with a password box half filled in.
 ; Leaves the client logged out.
 logout_tests:
     push rbx
-    call open_password_modal
+    mov edi, ACC_SECURITY
+    call open_account
     mov edi, F_OLD_PASS
     lea rsi, [t_hello]
     call type_into
@@ -1075,6 +1082,9 @@ settings_tests:
     mov edi, F_NONE
     call open_team_settings
     call frame
+    mov edi, A_TAB
+    mov esi, TAB_MEMBERS
+    call click_hit
     xor ebx, ebx
     mov edi, A_MANAGE
     mov esi, 2
@@ -1379,3 +1389,4 @@ tz_tests:
 %include "tests/ui_mentions.asm"
 %include "tests/ui_moderation.asm"
 %include "tests/ui_roles.asm"
+%include "tests/ui_account.asm"
